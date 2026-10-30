@@ -1,4 +1,4 @@
--- REVIEW DRAFT. Do not apply until the schema has been approved.
+-- Initial schema, applied to the gym-tracker Supabase project on 2026-10-30.
 -- One-user release: create the settings row with the approved Supabase Auth
 -- user ID after Google sign-in is configured. Until then, RLS denies all app data.
 

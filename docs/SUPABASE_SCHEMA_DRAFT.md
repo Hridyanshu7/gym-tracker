@@ -1,6 +1,6 @@
-# Supabase schema draft · review before migration
+# Supabase schema design
 
-Status: **Draft for confirmation.** No Supabase project or database has been changed.
+Status: **Initial schema deployed** to the gym-tracker Supabase project on 30 October 2026. App authentication and syncing remain to be implemented.
 
 ## Plan versus log
 
