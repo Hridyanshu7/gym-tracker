@@ -349,7 +349,10 @@ function render() {
   $('#date-button').classList.toggle('hidden',locked);
   $('#date-picker').value=ui.date;
   $('#date-button').textContent=ui.date===today()?`Today · ${fmtDate(ui.date)} ▾`:`${fmtDate(ui.date)} ▾`;
-  $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
+  // Keep the live editor node while background sync/auth updates arrive.
+  // Replacing it would clear text, targets, and the selected media file.
+  if(locked||ui.page!=='editor'||!$('#activity-form')||!$('#main').contains($('#activity-form')))
+    $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
   $('#add-button').classList.toggle('hidden',locked||ui.page!=='home'||isPast(ui.date));
   $('#storage-state').textContent=locked?'Locked':syncLabel();
 }
@@ -507,6 +510,7 @@ async function handleSubmit(event) {
   if(!['activity-form','existing-form','exception-form','passcode-form'].includes(form.id))return;
   event.preventDefault();
   try {
+    form.querySelector('[data-form-error]')?.remove();
     if(form.id==='passcode-form'){const passcode=String(new FormData(form).get('passcode')||'');await unlockWithPasscode(passcode);return}
     if(form.id==='activity-form')await saveActivity(form);
     if(form.id==='exception-form')await saveException(form);
@@ -517,7 +521,15 @@ async function handleSubmit(event) {
       data.logs.push({id:uid(),date:ui.date,time,activityId:source.id,scheduleId:null,name:source.name,description:source.description,categoryId:source.categoryId,categoryName:cat.name,categoryEmoji:cat.emoji,missionId:source.missionId,missionName:group?.name||null,media:source.media,method:source.method,unit:source.unit,targets:[...source.targets],targetMinutes:source.targetMinutes,sets:source.targets.map(target=>({target,actual:null})),actualMinutes:null,yesNo:null,doneAt:null,createdAt:new Date().toISOString()});
       closeModal();await persist('Activity added to this date');
     }
-  } catch(error){toast(error.message||'Could not save')}
+  } catch(error){
+    const message=error.message||'Could not save';
+    if(form.id==='activity-form') {
+      const errorNode=document.createElement('p');
+      errorNode.dataset.formError='';errorNode.className='form-error';errorNode.setAttribute('role','alert');errorNode.textContent=message;
+      form.querySelector('.form-actions')?.before(errorNode);
+      errorNode.scrollIntoView({block:'nearest'});
+    } else toast(message);
+  }
 }
 async function handleChange(event) {
   const target=event.target;
