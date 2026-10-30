@@ -1,4 +1,5 @@
 import {cloud, entityKey, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
+import {APP_AUTH_EMAIL} from './config.js';
 
 const DB_NAME = 'stride-local-v1';
 const STORE = 'app';
@@ -40,6 +41,7 @@ const starter = () => ({
 let data;
 let lastSavedState;
 let session=null;
+let unlocked=false;
 let syncing=false;
 let syncTimer;
 let syncError='';
@@ -48,6 +50,31 @@ const arrays={category_legend:'categories',missions:'missions',activities:'activ
 function syncMeta() {
   data._sync ||= {pending:[],revisions:{},settingsRevision:null,remoteInitialized:false,mediaCache:{}};
   return data._sync;
+}
+async function passcodeHash(passcode,salt) {
+  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(passcode),'PBKDF2',false,['deriveBits']);
+  return [...new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',salt,iterations:210000,hash:'SHA-256'},key,256))];
+}
+async function saveOfflineVerifier(passcode) {
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  syncMeta().offlineVerifier={salt:[...salt],hash:await passcodeHash(passcode,salt)};
+  await writeData(data);
+}
+async function unlockWithPasscode(passcode) {
+  if(navigator.onLine) {
+    const result=await cloud.auth.signInWithPassword({email:APP_AUTH_EMAIL,password:passcode});
+    if(result.error)throw new Error('Incorrect passcode or sign-in unavailable.');
+    session=result.data.session;
+    unlocked=true;
+    await saveOfflineVerifier(passcode);
+    render();scheduleSync(0);
+  } else {
+    const verifier=syncMeta().offlineVerifier;
+    if(!verifier)throw new Error('Connect once to enable offline access on this device.');
+    const hash=await passcodeHash(passcode,new Uint8Array(verifier.salt));
+    if(hash.length!==verifier.hash.length||!hash.every((byte,index)=>byte===verifier.hash[index]))throw new Error('Incorrect passcode.');
+    unlocked=true;render();
+  }
 }
 function queueChange(table,id) {
   const meta=syncMeta(), key=entityKey(table,id);
@@ -89,7 +116,7 @@ async function syncNow() {
     const meta=syncMeta();
     const initial=await pullCloud(meta.mediaCache);
     meta.ownerReady=initial.ownerReady;
-    if(!initial.ownerReady) throw new Error('Google account needs owner setup before sync.');
+    if(!initial.ownerReady) throw new Error('Cloud account setup is incomplete.');
     if(!meta.remoteInitialized) {
       if(localHasWork()) queueExistingLocalData();
       else if(!initial.state.categories.length) for(const item of data.categories)queueChange('category_legend',item.id);
@@ -285,7 +312,10 @@ function renderSettings() {
   if(!zones.includes(data.settings.timeZone))zones.unshift(data.settings.timeZone);
   return `${pageHead('Preferences','Settings','One time zone applies throughout the tracker.')}
   <div class="panel"><div class="field"><label for="timezone">Tracker time zone</label><select id="timezone">${zones.map(zone=>`<option value="${esc(zone)}" ${zone===data.settings.timeZone?'selected':''}>${esc(zone)}</option>`).join('')}</select></div><p class="muted">The device time zone supplied the initial value. This setting governs dates and midnight locking.</p></div>
-  <div class="panel"><strong>Cloud sync</strong><p class="muted">${esc(syncLabel())}${syncError?` · ${esc(syncError)}`:''}</p>${session?`<p>${esc(session.user.email||'Signed in')}</p><div class="form-actions"><button class="outline-button" type="button" data-sync-now ${!navigator.onLine||syncing?'disabled':''}>Sync now</button><button class="text-button" type="button" data-sign-out>Sign out</button></div>${syncMeta().conflictKey?`<p>This record changed on another device. Choose which version to keep.</p><div class="form-actions"><button class="outline-button" type="button" data-use-cloud>Use cloud</button><button class="primary-button" type="button" data-use-local>Keep mine</button></div>`:''}`:`<button class="primary-button" type="button" data-sign-in ${!navigator.onLine?'disabled':''}>Sign in with Google</button>`}<p class="muted">Changes stay on this device while offline. Synced changes leave the pending queue; cached data stays available offline.</p></div>`;
+  <div class="panel"><strong>Cloud sync</strong><p class="muted">${esc(syncLabel())}${syncError?` · ${esc(syncError)}`:''}</p>${!session&&navigator.onLine?'<form id="passcode-form"><div class="field"><label for="passcode">Passcode to reconnect</label><input id="passcode" name="passcode" type="password" inputmode="numeric" autocomplete="current-password" required></div><button class="primary-button" type="submit">Reconnect</button></form>':''}<div class="form-actions"><button class="outline-button" type="button" data-sync-now ${!session||!navigator.onLine||syncing?'disabled':''}>Sync now</button><button class="text-button" type="button" data-sign-out>Lock app</button></div>${syncMeta().conflictKey?`<p>This record changed on another device. Choose which version to keep.</p><div class="form-actions"><button class="outline-button" type="button" data-use-cloud>Use cloud</button><button class="primary-button" type="button" data-use-local>Keep mine</button></div>`:''}<p class="muted">Changes stay on this device while offline. Synced changes leave the pending queue; cached data stays available offline.</p></div>`;
+}
+function renderLock() {
+  return `<div class="panel" style="max-width:420px;margin:8vh auto"><p class="eyebrow">Stride</p><h1>Unlock tracker</h1><p class="muted">Enter your fixed passcode. Connect once on each device to use it offline.</p><form id="passcode-form"><div class="field"><label for="passcode">Passcode</label><input id="passcode" name="passcode" type="password" inputmode="numeric" autocomplete="current-password" required autofocus></div><div class="form-actions"><button class="primary-button" type="submit">Unlock</button></div></form>${syncError?`<p class="muted">${esc(syncError)}</p>`:''}</div>`;
 }
 function targetRows(values) {return values.map((value,index)=>`<div class="target-editor"><span>${index+1}</span><input class="target-value" type="number" min="0.001" step="any" value="${esc(value)}" aria-label="Target ${index+1}"><button type="button" data-remove-target aria-label="Remove target">×</button></div>`).join('')}
 function activityEditor(mode='library',existing=null) {
@@ -314,11 +344,14 @@ function renderEditor() {
   return `${pageHead('Activities',existing?'Edit activity':'Create activity','Set a clear target, required media, and the schedule.')}<div class="panel">${activityEditor('library',existing)}${existing?`<button class="danger-button" type="button" data-archive-activity="${existing.id}">Archive activity</button>`:''}</div>`;
 }
 function render() {
+  const locked=!unlocked;
+  $('#menu-button').classList.toggle('hidden',locked);
+  $('#date-button').classList.toggle('hidden',locked);
   $('#date-picker').value=ui.date;
   $('#date-button').textContent=ui.date===today()?`Today · ${fmtDate(ui.date)} ▾`:`${fmtDate(ui.date)} ▾`;
-  $('#main').innerHTML=ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
-  $('#add-button').classList.toggle('hidden',ui.page!=='home'||isPast(ui.date));
-  $('#storage-state').textContent=syncLabel();
+  $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
+  $('#add-button').classList.toggle('hidden',locked||ui.page!=='home'||isPast(ui.date));
+  $('#storage-state').textContent=locked?'Locked':syncLabel();
 }
 function openModal(title,body) {
   $('#modal').innerHTML=`<div class="modal-head"><div><p class="eyebrow">${esc(ui.date)}</p><h2>${esc(title)}</h2></div><button class="icon-button" type="button" data-close-modal aria-label="Close">×</button></div>${body}`;
@@ -446,8 +479,7 @@ async function handleClick(event) {
     if(target.id==='close-drawer'){$('#drawer-backdrop').classList.add('hidden');return}
     if(target.id==='date-button'){const picker=$('#date-picker');if(picker.showPicker)picker.showPicker();else picker.click();return}
     if(target.id==='add-button'){addChoice();return}
-    if(target.dataset.signIn!==undefined){const {error}=await cloud.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin+location.pathname}});if(error)throw error;return}
-    if(target.dataset.signOut!==undefined){const {error}=await cloud.auth.signOut();if(error)throw error;session=null;render();return}
+    if(target.dataset.signOut!==undefined){if(navigator.onLine)await cloud.auth.signOut();session=null;unlocked=false;$('#drawer-backdrop').classList.add('hidden');render();return}
     if(target.dataset.syncNow!==undefined){await syncNow();if(syncError)toast(syncError);else toast('Synced');return}
     if(target.dataset.useCloud!==undefined){await resolveConflict(false);return}
     if(target.dataset.useLocal!==undefined){await resolveConflict(true);return}
@@ -472,9 +504,10 @@ async function handleClick(event) {
 }
 async function handleSubmit(event) {
   const form=event.target;
-  if(!['activity-form','existing-form','exception-form'].includes(form.id))return;
+  if(!['activity-form','existing-form','exception-form','passcode-form'].includes(form.id))return;
   event.preventDefault();
   try {
+    if(form.id==='passcode-form'){const passcode=String(new FormData(form).get('passcode')||'');await unlockWithPasscode(passcode);return}
     if(form.id==='activity-form')await saveActivity(form);
     if(form.id==='exception-form')await saveException(form);
     if(form.id==='existing-form'){
@@ -522,7 +555,9 @@ async function init() {
       const auth=await cloud.auth.getSession();
       if(auth.error)throw auth.error;
       session=auth.data.session;
-      cloud.auth.onAuthStateChange((_event,next)=>{session=next;render();if(next)scheduleSync(0)});
+      unlocked=!!session;
+      cloud.auth.onAuthStateChange((_event,next)=>{session=next;if(next)unlocked=true;render();if(next)scheduleSync(0)});
+      render();
       if(session)scheduleSync(0);
     } catch(error) {syncError=error.message||'Sign-in unavailable';render();}
   } catch(error) {
