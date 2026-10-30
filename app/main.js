@@ -1,3 +1,5 @@
+import {cloud, entityKey, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
+
 const DB_NAME = 'stride-local-v1';
 const STORE = 'app';
 const $ = selector => document.querySelector(selector);
@@ -36,7 +38,122 @@ const starter = () => ({
   missions:[], activities:[], schedules:[], exceptions:[], logs:[]
 });
 let data;
+let lastSavedState;
+let session=null;
+let syncing=false;
+let syncTimer;
+let syncError='';
 const ui = {page:'home',date:'',expanded:null,editingActivity:null,modal:null};
+const arrays={category_legend:'categories',missions:'missions',activities:'activities',schedules:'schedules',schedule_exceptions:'exceptions',activity_logs:'logs'};
+function syncMeta() {
+  data._sync ||= {pending:[],revisions:{},settingsRevision:null,remoteInitialized:false,mediaCache:{}};
+  return data._sync;
+}
+function queueChange(table,id) {
+  const meta=syncMeta(), key=entityKey(table,id);
+  const current=meta.pending.find(item=>item.key===key);
+  if(current) current.changeId=uid();
+  else meta.pending.push({key,table,id,baseRevision:meta.revisions[key]??null,changeId:uid()});
+}
+function recordChanges() {
+  const before=lastSavedState||{settings:{},categories:[],missions:[],activities:[],schedules:[],exceptions:[],logs:[]};
+  for(const [table,field] of Object.entries(arrays)) {
+    const old=new Map((before[field]||[]).map(item=>[item.id,item]));
+    for(const item of data[field]) if(JSON.stringify(item)!==JSON.stringify(old.get(item.id))) queueChange(table,item.id);
+  }
+  if(data.settings.timeZone!==before.settings?.timeZone) queueChange('settings','owner');
+}
+function localHasWork() {
+  return data.activities.length||data.missions.length||data.schedules.length||data.exceptions.length||data.logs.length||
+    data.categories.some(item=>!['Strength','Cardio','Mobility','Other'].includes(item.name)||item.archived);
+}
+function queueExistingLocalData() {
+  for(const [table,field] of Object.entries(arrays)) for(const item of data[field]) queueChange(table,item.id);
+}
+function syncLabel() {
+  if(!navigator.onLine)return `Offline · ${syncMeta().pending.length} pending`;
+  if(!session)return 'Saved on device · sign in to sync';
+  if(syncing)return 'Syncing…';
+  if(syncError)return `Sync needs attention · ${syncMeta().pending.length} pending`;
+  if(!syncMeta().ownerReady)return 'Cloud account setup needed';
+  return syncMeta().pending.length?`${syncMeta().pending.length} changes pending`:'Synced';
+}
+function scheduleSync(delay=500) {
+  clearTimeout(syncTimer);
+  if(session&&navigator.onLine&&!syncMeta().conflictKey)syncTimer=setTimeout(()=>syncNow().catch(error=>{syncError=error.message;render()}),delay);
+}
+async function syncNow() {
+  if(syncing||!session||!navigator.onLine||syncMeta().conflictKey)return;
+  syncing=true;syncError='';render();
+  try {
+    const meta=syncMeta();
+    const initial=await pullCloud(meta.mediaCache);
+    meta.ownerReady=initial.ownerReady;
+    if(!initial.ownerReady) throw new Error('Google account needs owner setup before sync.');
+    if(!meta.remoteInitialized) {
+      if(localHasWork()) queueExistingLocalData();
+      else if(!initial.state.categories.length) for(const item of data.categories)queueChange('category_legend',item.id);
+      meta.remoteInitialized=true;
+    }
+    const order=['settings','category_legend','missions','activities','schedules','schedule_exceptions','activity_logs'];
+    for(const table of order) for(const pending of [...meta.pending.filter(entry=>entry.table===table)]) {
+      const current=meta.pending.find(entry=>entry.key===pending.key);
+      if(!current)continue;
+      const changeId=current.changeId;
+      if(table==='settings') {
+        if(current.baseRevision==null) current.baseRevision=initial.settingsRevision;
+        let revision;
+        try {revision=await updateTimeZone(data.settings.timeZone,current.baseRevision);}
+        catch(error) {if(error.message?.startsWith('Conflict:'))meta.conflictKey=current.key;throw error;}
+        meta.settingsRevision=revision;
+        current.baseRevision=revision;
+      } else {
+        const item=data[arrays[table]].find(row=>row.id===current.id);
+        if(!item)continue;
+        if(table==='activity_logs'&&item.activityId&&!item.mediaPath)item.mediaPath=data.activities.find(row=>row.id===item.activityId)?.mediaPath||null;
+        if(current.baseRevision==null&&initial.revisions[current.key]!=null)current.baseRevision=initial.revisions[current.key];
+        const snapshot=structuredClone(item);
+        let revision;
+        try {revision=await pushRecord(table,snapshot,current.baseRevision);}
+        catch(error) {
+          if(error.syncedRevision!=null)current.baseRevision=error.syncedRevision;
+          if(error.message?.startsWith('Conflict:'))meta.conflictKey=current.key;
+          if(snapshot.mediaPath&&item.media===snapshot.media)item.mediaPath=snapshot.mediaPath;
+          await writeData(data);
+          throw error;
+        }
+        if(snapshot.mediaPath&&item.media===snapshot.media)item.mediaPath=snapshot.mediaPath;
+        meta.revisions[current.key]=revision;
+        current.baseRevision=revision;
+      }
+      if(current.changeId===changeId) meta.pending=meta.pending.filter(entry=>entry!==current);
+      await writeData(data);
+    }
+    const fresh=await pullCloud(meta.mediaCache);
+    const dirty=new Set(meta.pending.map(item=>item.key));
+    for(const [table,field] of Object.entries(arrays)) {
+      const localRows=new Map(data[field].map(item=>[item.id,item]));
+      data[field]=fresh.state[field].map(item=>dirty.has(entityKey(table,item.id))?localRows.get(item.id)||item:item);
+      for(const item of localRows.values())if(dirty.has(entityKey(table,item.id))&&!data[field].some(row=>row.id===item.id))data[field].push(item);
+    }
+    if(!dirty.has(entityKey('settings','owner')))data.settings=fresh.state.settings;
+    meta.revisions={...fresh.revisions,...Object.fromEntries(meta.pending.map(item=>[item.key,meta.revisions[item.key]]).filter(([,revision])=>revision!=null))};
+    meta.settingsRevision=fresh.settingsRevision;
+    meta.mediaCache=fresh.mediaCache;
+    lastSavedState=structuredClone(data);
+    await writeData(data);
+  } catch(error) {syncError=error.message||'Sync failed';await writeData(data);}
+  finally {syncing=false;render();}
+}
+async function resolveConflict(useLocal) {
+  const meta=syncMeta(), key=meta.conflictKey;
+  if(!key)return;
+  const fresh=await pullCloud(meta.mediaCache);
+  const pending=meta.pending.find(item=>item.key===key);
+  if(useLocal&&pending)pending.baseRevision=key==='settings:owner'?fresh.settingsRevision:fresh.revisions[key]??null;
+  else meta.pending=meta.pending.filter(item=>item.key!==key);
+  meta.conflictKey=null;syncError='';await writeData(data);scheduleSync(0);render();
+}
 
 function dateParts(date = new Date()) {
   const pieces = new Intl.DateTimeFormat('en-US',{timeZone:data.settings.timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(date);
@@ -59,7 +176,7 @@ function toast(message) {
   const element=$('#toast'); element.textContent=message; element.classList.remove('hidden');
   clearTimeout(toast.timer); toast.timer=setTimeout(()=>element.classList.add('hidden'),2600);
 }
-async function persist(message) {await writeData(data); render(); if(message)toast(message)}
+async function persist(message) {recordChanges();await writeData(data);lastSavedState=structuredClone(data);render();if(message)toast(message);scheduleSync()}
 function category(id) {return data.categories.find(item=>item.id===id)}
 function mission(id) {return data.missions.find(item=>item.id===id)}
 function activity(id) {return data.activities.find(item=>item.id===id)}
@@ -168,7 +285,7 @@ function renderSettings() {
   if(!zones.includes(data.settings.timeZone))zones.unshift(data.settings.timeZone);
   return `${pageHead('Preferences','Settings','One time zone applies throughout the tracker.')}
   <div class="panel"><div class="field"><label for="timezone">Tracker time zone</label><select id="timezone">${zones.map(zone=>`<option value="${esc(zone)}" ${zone===data.settings.timeZone?'selected':''}>${esc(zone)}</option>`).join('')}</select></div><p class="muted">The device time zone supplied the initial value. This setting governs dates and midnight locking.</p></div>
-  <div class="panel"><strong>Storage</strong><p class="muted">This working preview saves data on this device. Supabase sync and Google sign-in will be connected after a Supabase project is created.</p></div>`;
+  <div class="panel"><strong>Cloud sync</strong><p class="muted">${esc(syncLabel())}${syncError?` · ${esc(syncError)}`:''}</p>${session?`<p>${esc(session.user.email||'Signed in')}</p><div class="form-actions"><button class="outline-button" type="button" data-sync-now ${!navigator.onLine||syncing?'disabled':''}>Sync now</button><button class="text-button" type="button" data-sign-out>Sign out</button></div>${syncMeta().conflictKey?`<p>This record changed on another device. Choose which version to keep.</p><div class="form-actions"><button class="outline-button" type="button" data-use-cloud>Use cloud</button><button class="primary-button" type="button" data-use-local>Keep mine</button></div>`:''}`:`<button class="primary-button" type="button" data-sign-in ${!navigator.onLine?'disabled':''}>Sign in with Google</button>`}<p class="muted">Changes stay on this device while offline. Synced changes leave the pending queue; cached data stays available offline.</p></div>`;
 }
 function targetRows(values) {return values.map((value,index)=>`<div class="target-editor"><span>${index+1}</span><input class="target-value" type="number" min="0.001" step="any" value="${esc(value)}" aria-label="Target ${index+1}"><button type="button" data-remove-target aria-label="Remove target">×</button></div>`).join('')}
 function activityEditor(mode='library',existing=null) {
@@ -201,7 +318,7 @@ function render() {
   $('#date-button').textContent=ui.date===today()?`Today · ${fmtDate(ui.date)} ▾`:`${fmtDate(ui.date)} ▾`;
   $('#main').innerHTML=ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
   $('#add-button').classList.toggle('hidden',ui.page!=='home'||isPast(ui.date));
-  $('#storage-state').textContent=navigator.onLine?'Local preview · no cloud sync':'Offline · saved on device';
+  $('#storage-state').textContent=syncLabel();
 }
 function openModal(title,body) {
   $('#modal').innerHTML=`<div class="modal-head"><div><p class="eyebrow">${esc(ui.date)}</p><h2>${esc(title)}</h2></div><button class="icon-button" type="button" data-close-modal aria-label="Close">×</button></div>${body}`;
@@ -329,6 +446,11 @@ async function handleClick(event) {
     if(target.id==='close-drawer'){$('#drawer-backdrop').classList.add('hidden');return}
     if(target.id==='date-button'){const picker=$('#date-picker');if(picker.showPicker)picker.showPicker();else picker.click();return}
     if(target.id==='add-button'){addChoice();return}
+    if(target.dataset.signIn!==undefined){const {error}=await cloud.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin+location.pathname}});if(error)throw error;return}
+    if(target.dataset.signOut!==undefined){const {error}=await cloud.auth.signOut();if(error)throw error;session=null;render();return}
+    if(target.dataset.syncNow!==undefined){await syncNow();if(syncError)toast(syncError);else toast('Synced');return}
+    if(target.dataset.useCloud!==undefined){await resolveConflict(false);return}
+    if(target.dataset.useLocal!==undefined){await resolveConflict(true);return}
     if(target.dataset.closeModal!==undefined){closeModal();return}
     if(target.dataset.page){setPage(target.dataset.page);return}
     if(target.dataset.addExisting!==undefined){addExisting();return}
@@ -381,17 +503,28 @@ document.addEventListener('keydown',event=>{
 });
 $('#modal-backdrop').addEventListener('click',event=>{if(event.target.id==='modal-backdrop')closeModal()});
 $('#drawer-backdrop').addEventListener('click',event=>{if(event.target.id==='drawer-backdrop')event.target.classList.add('hidden')});
-window.addEventListener('online',render);
+window.addEventListener('online',()=>{render();scheduleSync(0)});
 window.addEventListener('offline',render);
+window.addEventListener('focus',()=>scheduleSync(0));
 
 async function init() {
   try {
     data=await readData()||starter();
+    syncMeta();
+    lastSavedState=structuredClone(data);
     ui.date=today();
-    if(materializeMissedDates())await writeData(data);
+    if(materializeMissedDates()){recordChanges();await writeData(data);}
     else if(!await readData())await writeData(data);
+    lastSavedState=structuredClone(data);
     render();
     if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    try {
+      const auth=await cloud.auth.getSession();
+      if(auth.error)throw auth.error;
+      session=auth.data.session;
+      cloud.auth.onAuthStateChange((_event,next)=>{session=next;render();if(next)scheduleSync(0)});
+      if(session)scheduleSync(0);
+    } catch(error) {syncError=error.message||'Sign-in unavailable';render();}
   } catch(error) {
     $('#main').innerHTML=`<div class="empty"><strong>Local storage is unavailable</strong><p>${esc(error.message)}. Open this app through localhost or HTTPS in a browser that supports IndexedDB.</p></div>`;
   }

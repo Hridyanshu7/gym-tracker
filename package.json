@@ -1,0 +1,23 @@
+{
+  "name": "gym-tracker",
+  "version": "1.0.0",
+  "description": "Lightweight gym activity tracker",
+  "scripts": {
+    "build": "esbuild app/main.js --bundle --format=esm --target=es2022 --minify --outfile=app/build.js",
+    "check": "node --check app/main.js && node --check app/cloud.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hridyanshu7/gym-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
