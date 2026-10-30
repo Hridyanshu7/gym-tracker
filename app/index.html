@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#234c38">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./style.css">
+  <title>Stride</title>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="menu-button" class="icon-button" type="button" aria-label="Open menu">☰</button>
+        <button id="date-button" class="date-button" type="button">Today ▾</button>
+        <input id="date-picker" type="date" aria-label="Choose date">
+      </div>
+      <div class="topbar-right"><span id="storage-state">Saved on device</span><strong class="brand">stride<span>.</span></strong></div>
+    </header>
+    <main id="main"></main>
+    <button id="add-button" class="floating-add" type="button" aria-label="Add activity to selected date">+</button>
+    <div id="drawer-backdrop" class="backdrop hidden">
+      <nav class="drawer" aria-label="Main navigation">
+        <div class="drawer-head"><strong class="brand">stride<span>.</span></strong><button id="close-drawer" class="icon-button" type="button" aria-label="Close menu">×</button></div>
+        <button type="button" data-page="home">⌂ <span>Today</span></button>
+        <button type="button" data-page="activities">▤ <span>Activities</span></button>
+        <button type="button" data-page="missions">▦ <span>Missions</span></button>
+        <button type="button" data-page="settings">⚙ <span>Settings</span></button>
+        <button type="button" disabled>◫ <span>Analytics · later</span></button>
+      </nav>
+    </div>
+    <div id="modal-backdrop" class="backdrop modal-backdrop hidden"><div id="modal" class="modal" role="dialog" aria-modal="true"></div></div>
+    <div id="toast" class="toast hidden" role="status"></div>
+  </div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
