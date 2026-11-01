@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Lightweight gym activity tracker",
   "scripts": {
-    "build": "esbuild app/main.js --bundle --format=esm --target=es2022 --minify --outfile=app/build.js",
+    "build": "esbuild app/main.js --bundle --format=esm --target=es2022 --minify --outfile=app/build.js && esbuild node_modules/emoji-picker-element/index.js --bundle --format=esm --target=es2022 --minify --outfile=app/emoji-picker.js && cp node_modules/emoji-picker-element-data/en/emojibase/data.json app/emoji-data.json",
     "check": "node --check app/main.js && node --check app/cloud.js"
   },
   "repository": {
@@ -15,7 +15,9 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@supabase/supabase-js": "^2.118.0"
+    "@supabase/supabase-js": "^2.118.0",
+    "emoji-picker-element": "^1.29.1",
+    "emoji-picker-element-data": "^1.8.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

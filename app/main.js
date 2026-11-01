@@ -302,6 +302,29 @@ function renderCategories() {
   const rows=data.categories.filter(item=>!item.archived);
   return `${pageHead('Activities','Category legend','Editable emoji choices used by activities.',`<button class="primary-button" type="button" data-add-category>+ Category</button>`)}<div class="panel">${rows.map(item=>`<div class="list-card"><span class="icon">${esc(item.emoji)}</span><span class="details"><strong>${esc(item.name)}</strong></span><button class="text-button" type="button" data-edit-category="${item.id}">Edit</button></div>`).join('')}</div>`;
 }
+function editCategory(existing=null) {
+  openModal(existing?'Edit category':'New category',`<form id="category-form" data-id="${existing?.id||''}"><div class="field"><label for="category-name">Name</label><input id="category-name" name="name" maxlength="60" required value="${esc(existing?.name||'')}" placeholder="e.g. Strength"></div><div class="field"><label for="category-emoji">Emoji</label><div class="emoji-field"><input id="category-emoji" name="emoji" required value="${esc(existing?.emoji||'')}" placeholder="Choose or type an emoji" aria-describedby="emoji-help"><button class="outline-button" type="button" data-open-emoji>Choose emoji</button></div><small id="emoji-help" class="muted">Search all Unicode emoji, or use your keyboard.</small></div><div id="emoji-picker-slot" class="emoji-picker-slot hidden"></div><div class="form-actions"><button class="outline-button" type="button" data-close-modal>Cancel</button><button class="primary-button" type="submit">Save category</button></div></form>`);
+}
+async function toggleEmojiPicker() {
+  const slot=$('#emoji-picker-slot');
+  if(!slot)return;
+  if(!slot.classList.contains('hidden')){slot.classList.add('hidden');return}
+  slot.classList.remove('hidden');
+  if(slot.childElementCount)return;
+  slot.textContent='Loading emoji…';
+  try {
+    const url=new URL('./emoji-picker.js',location.href);
+    const {Picker}=await import(url.href);
+    if(!slot.isConnected)return;
+    const picker=new Picker({dataSource:new URL('./emoji-data.json',location.href).href});
+    picker.addEventListener('emoji-click',event=>{
+      const input=$('#category-emoji');
+      if(input)input.value=event.detail.unicode;
+      slot.classList.add('hidden');
+    });
+    slot.replaceChildren(picker);
+  } catch(error) {slot.textContent='Emoji picker unavailable. You can still type or paste an emoji.'}
+}
 function renderMissions() {
   const rows=data.missions.filter(item=>!item.archived);
   return `${pageHead('Group activities','Missions','Optional groups. Each activity keeps its own schedule.',`<button class="primary-button" type="button" data-add-mission>+ Mission</button>`)}
@@ -501,17 +524,26 @@ async function handleClick(event) {
     if(target.dataset.answer){event.stopPropagation();await answer(target.dataset.id,target.dataset.answer==='yes');return}
     if(target.dataset.done){await saveResult(target.dataset.done);return}
     if(target.dataset.editDate){editDate(rowsFor(ui.date).find(row=>row.id===target.dataset.editDate));return}
-    if(target.dataset.addCategory!==undefined||target.dataset.editCategory){const existing=target.dataset.editCategory?category(target.dataset.editCategory):null;const name=prompt('Category name',existing?.name||'');if(name===null)return;const emoji=prompt('Category emoji',existing?.emoji||'');if(emoji===null)return;if(!name.trim()||!emoji.trim())throw new Error('Name and emoji are required.');if(existing)Object.assign(existing,{name:name.trim(),emoji:emoji.trim()});else data.categories.push({id:uid(),name:name.trim(),emoji:emoji.trim(),archived:false});await persist('Category saved');return}
+    if(target.dataset.addCategory!==undefined||target.dataset.editCategory){editCategory(target.dataset.editCategory?category(target.dataset.editCategory):null);return}
+    if(target.dataset.openEmoji!==undefined){await toggleEmojiPicker();return}
     if(target.dataset.addMission!==undefined||target.dataset.editMission){const existing=target.dataset.editMission?mission(target.dataset.editMission):null;const name=prompt('Mission name',existing?.name||'');if(name===null)return;if(!name.trim())throw new Error('Mission name is required.');if(existing)existing.name=name.trim();else data.missions.push({id:uid(),name:name.trim(),archived:false});await persist('Mission saved');return}
   } catch(error){toast(error.message||'Could not save change')}
 }
 async function handleSubmit(event) {
   const form=event.target;
-  if(!['activity-form','existing-form','exception-form','passcode-form'].includes(form.id))return;
+  if(!['activity-form','existing-form','exception-form','passcode-form','category-form'].includes(form.id))return;
   event.preventDefault();
   try {
     form.querySelector('[data-form-error]')?.remove();
     if(form.id==='passcode-form'){const passcode=String(new FormData(form).get('passcode')||'');await unlockWithPasscode(passcode);return}
+    if(form.id==='category-form'){
+      const values=new FormData(form),name=String(values.get('name')||'').trim(),emoji=String(values.get('emoji')||'').trim();
+      if(!name||!emoji)throw new Error('Name and emoji are required.');
+      const existing=form.dataset.id?category(form.dataset.id):null;
+      if(existing)Object.assign(existing,{name,emoji});
+      else data.categories.push({id:uid(),name,emoji,archived:false});
+      closeModal();await persist('Category saved');return;
+    }
     if(form.id==='activity-form')await saveActivity(form);
     if(form.id==='exception-form')await saveException(form);
     if(form.id==='existing-form'){
