@@ -363,7 +363,7 @@ function activityEditor(mode='library',existing=null) {
     <div class="form-grid"><div class="field"><label for="activity-name">Activity name</label><input id="activity-name" name="name" required value="${esc(existing?.name||'')}" placeholder="e.g. Bench press"></div><div class="field"><label for="category-id">Category</label><select id="category-id" name="categoryId" required>${data.categories.filter(item=>!item.archived||item.id===selectedCategory).map(item=>`<option value="${item.id}" ${item.id===selectedCategory?'selected':''}>${esc(item.emoji)} ${esc(item.name)}</option>`).join('')}</select></div></div>
     <div class="field"><label for="description">One-line description</label><input id="description" name="description" required maxlength="160" value="${esc(existing?.description||'')}" placeholder="A short cue for this activity"></div>
     <div class="form-grid"><div class="field"><label for="mission-id">Mission · optional</label><select id="mission-id" name="missionId"><option value="">No Mission</option>${data.missions.filter(item=>!item.archived||item.id===selectedMission).map(item=>`<option value="${item.id}" ${item.id===selectedMission?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label for="activity-time">Start time</label><input id="activity-time" name="time" type="time" required value="${esc(schedule?.time||'07:00')}"></div></div>
-    <div class="field"><label for="activity-media">Image or GIF · required</label>${existing?`<img class="media-preview" src="${esc(existing.media)}" alt="Activity media" style="max-width:160px;height:100px">`:`<input id="activity-media" name="media" type="file" accept="image/*" required>`}</div>
+    <div class="field"><label for="activity-media">Image or GIF · required</label>${existing?`<img class="media-preview" src="${esc(existing.media)}" alt="Activity media" style="max-width:160px;height:100px">`:`<div class="media-choices"><input id="activity-media" name="media" type="file" accept="image/*" required><button class="outline-button" type="button" data-paste-media>Paste image</button></div><p class="muted">You can also press Ctrl/⌘+V while this form is open.</p><img class="media-preview hidden" id="new-media-preview" alt="Selected activity image"><p id="media-feedback" class="muted" role="status"></p>`}</div>
     <div class="field"><label for="method">Tracking method</label><select id="method" name="method"><option value="amount" ${selectedMethod==='amount'?'selected':''}>Amount / target</option><option value="duration" ${selectedMethod==='duration'?'selected':''}>Duration</option><option value="yes_no" ${selectedMethod==='yes_no'?'selected':''}>Yes / No</option></select></div>
     <div id="amount-fields" ${selectedMethod!=='amount'?'class="hidden"':''}><div class="form-grid"><div class="field"><label for="unit">Unit</label><input id="unit" name="unit" value="${esc(existing?.unit||'reps')}" placeholder="reps, km, etc."></div><div class="field"><label>Targets · one minimum</label><div id="target-list">${targetRows(targetValues)}</div><button class="text-button" type="button" data-add-target>+ Add set / segment</button></div></div></div>
     <div id="duration-fields" ${selectedMethod!=='duration'?'class="hidden"':''}><div class="field"><label for="duration-target">Target duration · hh:mm</label><input id="duration-target" name="targetDuration" inputmode="numeric" value="${existing?.targetMinutes!=null?fmtDuration(existing.targetMinutes):'00:30'}" placeholder="00:30"></div></div>
@@ -406,6 +406,36 @@ function addNew() {openModal('New activity for this date',activityEditor('date-o
 function fileToDataUrl(file) {
   return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file)});
 }
+async function setActivityMedia(form,file,source) {
+  if(!file||!file.type.startsWith('image/')||!file.size)throw new Error('Clipboard must contain an image or GIF.');
+  const input=form.querySelector('#activity-media');
+  if(!input)return;
+  form._selectedMediaFile=file;
+  if(source==='paste'){input.value='';input.required=false}
+  else input.required=true;
+  const preview=form.querySelector('#new-media-preview');
+  const feedback=form.querySelector('#media-feedback');
+  feedback.textContent=source==='paste'?'Image pasted · ready to save':`${file.name} · ready to save`;
+  const image=await fileToDataUrl(file);
+  if(!form.isConnected||form._selectedMediaFile!==file)return;
+  preview.src=image;
+  preview.classList.remove('hidden');
+}
+async function pasteActivityMedia(form) {
+  if(!navigator.clipboard?.read)throw new Error('Clipboard button is unavailable here. Use Ctrl/⌘+V or choose a file.');
+  let items;
+  try {items=await navigator.clipboard.read()}
+  catch {throw new Error('Clipboard access was blocked. Use Ctrl/⌘+V or choose a file.')}
+  for(const item of items) {
+    const type=item.types.find(type=>type.startsWith('image/'));
+    if(!type)continue;
+    const blob=await item.getType(type);
+    const file=new File([blob],`pasted-image.${type.split('/')[1]||'png'}`,{type});
+    await setActivityMedia(form,file,'paste');
+    return;
+  }
+  throw new Error('No image found on the clipboard. Copy an image, then try again.');
+}
 function readTargets(form) {
   const values=[...form.querySelectorAll('.target-value')].map(input=>Number(input.value));
   if(!values.length||values.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Enter a positive target for every set or segment.');
@@ -413,7 +443,7 @@ function readTargets(form) {
 }
 async function saveActivity(form) {
   const values=new FormData(form), mode=form.dataset.mode, existing=form.dataset.id?activity(form.dataset.id):null;
-  const method=values.get('method'), file=values.get('media');
+  const method=values.get('method'), file=form._selectedMediaFile||values.get('media');
   if(file?.size && !file.type.startsWith('image/'))throw new Error('Choose an image or GIF.');
   const media=file?.size?await fileToDataUrl(file):existing?.media;
   if(!media)throw new Error('An image or GIF is required.');
@@ -537,6 +567,7 @@ async function handleClick(event) {
     if(target.dataset.editDate){editDate(rowsFor(ui.date).find(row=>row.id===target.dataset.editDate));return}
     if(target.dataset.addCategory!==undefined||target.dataset.editCategory){editCategory(target.dataset.editCategory?category(target.dataset.editCategory):null);return}
     if(target.dataset.openEmoji!==undefined){await toggleEmojiPicker();return}
+    if(target.dataset.pasteMedia!==undefined){await pasteActivityMedia(target.closest('#activity-form'));return}
     if(target.dataset.addMission!==undefined||target.dataset.editMission){const existing=target.dataset.editMission?mission(target.dataset.editMission):null;const name=prompt('Mission name',existing?.name||'');if(name===null)return;if(!name.trim())throw new Error('Mission name is required.');if(existing)existing.name=name.trim();else data.missions.push({id:uid(),name:name.trim(),archived:false});await persist('Mission saved');return}
   } catch(error){toast(error.message||'Could not save change')}
 }
@@ -578,6 +609,12 @@ async function handleChange(event) {
   const target=event.target;
   try {
     if(target.id==='date-picker'){if(target.value){ui.date=target.value;ui.expanded=null;render()}return}
+    if(target.id==='activity-media'){
+      const form=target.closest('#activity-form');
+      if(target.files?.[0])await setActivityMedia(form,target.files[0],'upload');
+      else {form._selectedMediaFile=null;target.required=true;form.querySelector('#new-media-preview').classList.add('hidden');form.querySelector('#media-feedback').textContent=''}
+      return;
+    }
     if(target.id==='timezone'){data.settings.timeZone=target.value;ui.date=today();materializeMissedDates();await persist('Time zone updated');return}
     if(target.id==='method'||target.name==='kind'){changeMethodFields(target.closest('form'));return}
   } catch(error){toast(error.message||'Could not update')}
@@ -585,6 +622,15 @@ async function handleChange(event) {
 document.addEventListener('click',handleClick);
 document.addEventListener('submit',handleSubmit);
 document.addEventListener('change',handleChange);
+document.addEventListener('paste',event=>{
+  const form=event.target.closest('#activity-form')||document.querySelector('#modal #activity-form')||document.querySelector('#main #activity-form');
+  if(!form?.querySelector('#activity-media'))return;
+  const item=[...(event.clipboardData?.items||[])].find(item=>item.type.startsWith('image/'));
+  if(!item)return;
+  event.preventDefault();
+  const file=item.getAsFile();
+  if(file)setActivityMedia(form,file,'paste').catch(error=>toast(error.message||'Could not paste image'));
+});
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){closeModal();$('#drawer-backdrop').classList.add('hidden')}
   if((event.key==='Enter'||event.key===' ')&&event.target.dataset.expand){event.preventDefault();event.target.click()}

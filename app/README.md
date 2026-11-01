@@ -15,3 +15,5 @@ Open `http://127.0.0.1:5173/`. The service worker caches the app for offline use
 For initial cloud setup, place the Supabase project access token and project ref in ignored `.env.local`, then run `python3 scripts/setup_passcode.py`. The script generates a 12-digit passcode there if none exists, creates the sole Auth user, binds the RLS owner, and disables public signup. Run it only for the initial setup. The browser uses only the public key in `config.js`.
 
 Use **Activities** to create a reusable activity and schedule, or Home **+** to create a date-only activity. Changes made offline sync when the device reconnects and has an active session; synced pending edits are removed while the local cache remains.
+
+When creating an activity, add its required image or GIF with **Choose File**, **Paste image**, or Ctrl/⌘+V while the form is open. A preview confirms what will be saved. Some browsers paste a GIF as a still image; use file upload when animation matters.
