@@ -301,7 +301,7 @@ function renderHome() {
   const selected=ui.date, rows=rowsFor(selected), locked=isPast(selected);
   const recorded=rows.filter(row=>row.method==='yes_no'?row.yesNo!=null:row.method==='duration'?row.actualMinutes!=null:row.sets.some(set=>set.actual!=null)).length;
   return `${pageHead('Your day',selected===today()?'Today, '+fmtDate(selected):fmtDate(selected),locked?'Locked · results cannot be changed':'Activities in start-time order')}
-  <div class="stats"><div class="stat"><strong>${rows.length}</strong><span>Planned</span></div><div class="stat"><strong>${recorded}</strong><span>Recorded</span></div><div class="stat"><strong>${rows.length?rows.at(-1).time:'—'}</strong><span>Last start</span></div></div>
+  <div class="stats"><div class="stat"><strong>${rows.length}</strong><span>Planned</span></div><div class="stat"><strong>${recorded}</strong><span>Recorded</span></div></div>
   <div class="section-heading"><span>Timeline</span><span class="status-pill ${locked?'muted':''}">${locked?'🔒 Locked':selected===today()?'● Today':'Upcoming'}</span></div>
   ${rows.length?rows.map(renderActivityRow).join(''):`<div class="empty"><strong>Nothing planned for this date</strong><p>Use + to add an activity for this date, or create a repeating activity in Activities.</p></div>`}`;
 }
