@@ -1,5 +1,6 @@
 import {cloud, entityKey, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
 import {APP_AUTH_EMAIL} from './config.js';
+import {adoptCloudOccurrence, reconcilePendingLogs} from './reconcile.js';
 
 const DB_NAME = 'stride-local-v1';
 const STORE = 'app';
@@ -122,6 +123,7 @@ async function syncNow() {
       else if(!initial.state.categories.length) for(const item of data.categories)queueChange('category_legend',item.id);
       meta.remoteInitialized=true;
     }
+    reconcilePendingLogs(data,meta,initial.state,initial.revisions);
     const order=['settings','category_legend','missions','activities','schedules','schedule_exceptions','activity_logs'];
     for(const table of order) for(const pending of [...meta.pending.filter(entry=>entry.table===table)]) {
       const current=meta.pending.find(entry=>entry.key===pending.key);
@@ -177,7 +179,16 @@ async function resolveConflict(useLocal) {
   if(!key)return;
   const fresh=await pullCloud(meta.mediaCache);
   const pending=meta.pending.find(item=>item.key===key);
-  if(useLocal&&pending)pending.baseRevision=key==='settings:owner'?fresh.settingsRevision:fresh.revisions[key]??null;
+  if(meta.occurrenceConflict) {
+    const conflict=meta.occurrenceConflict;
+    const remote=fresh.state.logs.find(log=>log.id===conflict.remoteId);
+    if(useLocal&&pending&&remote)adoptCloudOccurrence(data,meta,pending,remote,fresh.revisions);
+    else {
+      data.logs=data.logs.filter(log=>log.id!==conflict.localId);
+      meta.pending=meta.pending.filter(item=>item!==pending);
+    }
+    meta.occurrenceConflict=null;
+  } else if(useLocal&&pending)pending.baseRevision=key==='settings:owner'?fresh.settingsRevision:fresh.revisions[key]??null;
   else meta.pending=meta.pending.filter(item=>item.key!==key);
   meta.conflictKey=null;syncError='';await writeData(data);scheduleSync(0);render();
 }

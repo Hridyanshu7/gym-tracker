@@ -4,7 +4,7 @@
   "description": "Lightweight gym activity tracker",
   "scripts": {
     "build": "esbuild app/main.js --bundle --format=esm --target=es2022 --minify --outfile=app/build.js && esbuild node_modules/emoji-picker-element/index.js --bundle --format=esm --target=es2022 --minify --outfile=app/emoji-picker.js && cp node_modules/emoji-picker-element-data/en/emojibase/data.json app/emoji-data.json",
-    "check": "node --check app/main.js && node --check app/cloud.js"
+    "check": "node --check app/main.js && node --check app/cloud.js && node --check app/reconcile.js"
   },
   "repository": {
     "type": "git",
