@@ -229,14 +229,17 @@ function planFor(schedule,date) {
   const change=exception(schedule.id,date);
   if (change?.cancelled) return null;
   const cat=category(source.categoryId), group=mission(change?.missionSet?change.missionId:source.missionId);
+  const dayTarget=schedule.kind==='weekdays'?schedule.weekdayTargets?.[weekday(date)]:null;
+  const targets=change?.targets||dayTarget?.targets||source.targets||[];
+  const targetMinutes=change?.targetMinutes??dayTarget?.targetMinutes??source.targetMinutes??null;
   return {
     id:`virtual:${schedule.id}:${date}`, date, scheduleId:schedule.id, activityId:source.id,
     time:change?.time||schedule.time, name:source.name, description:source.description,
     categoryId:source.categoryId, categoryName:cat?.name||'Category', categoryEmoji:cat?.emoji||'🏋️',
     missionId:group?.id||null, missionName:group?.name||null, media:source.media,
     method:source.method, unit:source.unit||null,
-    targets:change?.targets||source.targets||[], targetMinutes:change?.targetMinutes??source.targetMinutes??null,
-    sets:(change?.targets||source.targets||[]).map(target=>({target,actual:null})),
+    targets, targetMinutes,
+    sets:targets.map(target=>({target,actual:null})),
     actualMinutes:null,yesNo:null,doneAt:null
   };
 }
@@ -352,6 +355,52 @@ function renderLock() {
   return `<div class="panel" style="max-width:420px;margin:8vh auto"><p class="eyebrow">Stride</p><h1>Unlock tracker</h1><p class="muted">Enter your fixed passcode. Connect once on each device to use it offline.</p><form id="passcode-form"><div class="field"><label for="passcode">Passcode</label><input id="passcode" name="passcode" type="password" inputmode="numeric" autocomplete="current-password" required autofocus></div><div class="form-actions"><button class="primary-button" type="submit">Unlock</button></div></form>${syncError?`<p class="muted">${esc(syncError)}</p>`:''}</div>`;
 }
 function targetRows(values) {return values.map((value,index)=>`<div class="target-editor"><span>${index+1}</span><input class="target-value" type="number" min="0.001" step="any" value="${esc(value)}" aria-label="Target ${index+1}"><button type="button" data-remove-target aria-label="Remove target">×</button></div>`).join('')}
+const dayNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+function selectedWeekdays(form) {return [...form.querySelectorAll('[name="weekday"]:checked')].map(input=>Number(input.value))}
+function currentDayTarget(form) {
+  const method=form.querySelector('#method').value;
+  return method==='amount'?{targets:[...form.querySelectorAll('#target-list .target-value')].map(input=>input.value)}:
+    method==='duration'?{targetMinutes:form.querySelector('#duration-target').value}:{};
+}
+function storeDayTarget(form) {
+  if(form._customDay&&form._activeDay!=null)form._dayTargets[form._activeDay]=currentDayTarget(form);
+}
+function putTargetInputs(form,target) {
+  if(form.querySelector('#method').value==='amount')form.querySelector('#target-list').innerHTML=targetRows(target.targets||[10]);
+  if(form.querySelector('#method').value==='duration')form.querySelector('#duration-target').value=target.targetMinutes||'00:30';
+}
+function showDayTarget(form) {
+  const days=selectedWeekdays(form);
+  const allowed=form.dataset.mode==='library'&&form.querySelector('[name="kind"]:checked')?.value==='weekdays'&&days.length>1&&form.querySelector('#method').value!=='yes_no';
+  const controls=form.querySelector('#day-target-controls');
+  controls.classList.toggle('hidden',!allowed);
+  if(!allowed){
+    if(form._customDay){
+      const target=form._dayTargets[days[0]]||form._sharedTarget;
+      form._sharedTarget=structuredClone(target);
+      putTargetInputs(form,target);
+      form._customDay=false;form._dayTargets={};form.querySelector('#customize-by-day').checked=false;
+    }
+    form.querySelector('#day-tabs').classList.add('hidden');return;
+  }
+  if(!form._customDay){form.querySelector('#day-tabs').classList.add('hidden');return}
+  if(!days.includes(form._activeDay))form._activeDay=days[0];
+  const target=form._dayTargets[form._activeDay]||form._sharedTarget;
+  form.querySelector('#day-tabs').classList.remove('hidden');
+  form.querySelector('#day-tabs').innerHTML=days.map(day=>`<button class="day-target-tab ${day===form._activeDay?'active':''}" type="button" data-day-tab="${day}" aria-pressed="${day===form._activeDay}"><strong>${dayNames[day-1]}</strong><small>${form.querySelector('#method').value==='amount'?`${(form._dayTargets[day]?.targets||form._sharedTarget.targets||[]).length} sets`:form.querySelector('#method').value==='duration'?'Duration':'Yes / No'}</small></button>`).join('');
+  putTargetInputs(form,target);
+  const copy=form.querySelector('#copy-source');
+  copy.innerHTML=days.filter(day=>day!==form._activeDay).map(day=>`<option value="${day}">${dayNames[day-1]}</option>`).join('');
+  form.querySelector('#copy-day-target').classList.toggle('hidden',days.length<2);
+}
+function initDayTargets(form,schedule) {
+  form._dayTargets=structuredClone(schedule?.weekdayTargets||{});
+  form._sharedTarget=currentDayTarget(form);
+  form._customDay=Object.keys(form._dayTargets).length>0;
+  form._activeDay=selectedWeekdays(form)[0]||1;
+  form.querySelector('#customize-by-day').checked=form._customDay;
+  showDayTarget(form);
+}
 function activityEditor(mode='library',existing=null) {
   const schedule=existing?data.schedules.find(item=>item.activityId===existing.id):null;
   const selectedCategory=existing?.categoryId||data.categories.find(item=>!item.archived)?.id;
@@ -365,11 +414,12 @@ function activityEditor(mode='library',existing=null) {
     <div class="form-grid"><div class="field"><label for="mission-id">Mission · optional</label><select id="mission-id" name="missionId"><option value="">No Mission</option>${data.missions.filter(item=>!item.archived||item.id===selectedMission).map(item=>`<option value="${item.id}" ${item.id===selectedMission?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label for="activity-time">Start time</label><input id="activity-time" name="time" type="time" required value="${esc(schedule?.time||'07:00')}"></div></div>
     <div class="field"><label for="activity-media">Image or GIF · required</label>${existing?`<img class="media-preview" src="${esc(existing.media)}" alt="Activity media" style="max-width:160px;height:100px">`:`<div class="media-choices"><input id="activity-media" name="media" type="file" accept="image/*" required><button class="outline-button" type="button" data-paste-media>Paste image</button></div><p class="muted">You can also press Ctrl/⌘+V while this form is open.</p><img class="media-preview hidden" id="new-media-preview" alt="Selected activity image"><p id="media-feedback" class="muted" role="status"></p>`}</div>
     <div class="field"><label for="method">Tracking method</label><select id="method" name="method"><option value="amount" ${selectedMethod==='amount'?'selected':''}>Amount / target</option><option value="duration" ${selectedMethod==='duration'?'selected':''}>Duration</option><option value="yes_no" ${selectedMethod==='yes_no'?'selected':''}>Yes / No</option></select></div>
-    <div id="amount-fields" ${selectedMethod!=='amount'?'class="hidden"':''}><div class="form-grid"><div class="field"><label for="unit">Unit</label><input id="unit" name="unit" value="${esc(existing?.unit||'reps')}" placeholder="reps, km, etc."></div><div class="field"><label>Targets · one minimum</label><div id="target-list">${targetRows(targetValues)}</div><button class="text-button" type="button" data-add-target>+ Add set / segment</button></div></div></div>
-    <div id="duration-fields" ${selectedMethod!=='duration'?'class="hidden"':''}><div class="field"><label for="duration-target">Target duration · hh:mm</label><input id="duration-target" name="targetDuration" inputmode="numeric" value="${existing?.targetMinutes!=null?fmtDuration(existing.targetMinutes):'00:30'}" placeholder="00:30"></div></div>
     ${mode==='library'?`<div class="field"><label>Schedule</label><div class="radio-row"><label><input type="radio" name="kind" value="weekdays" ${selectedKind==='weekdays'?'checked':''}> Selected weekdays</label><label><input type="radio" name="kind" value="date" ${selectedKind==='date'?'checked':''}> One date</label></div></div>
     <div id="weekdays-fields" ${selectedKind!=='weekdays'?'class="hidden"':''}><div class="field"><label>Days of week · one shared start time</label><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((name,index)=>`<label><input type="checkbox" name="weekday" value="${index+1}" ${(schedule?.weekdays||[]).includes(index+1)?'checked':''}>${name}</label>`).join('')}</div></div><div class="form-grid"><div class="field"><label for="starts-on">Starts on</label><input id="starts-on" name="startsOn" type="date" value="${schedule?.startsOn||today()}"></div><div class="field"><label for="ends-on">Ends on · optional</label><input id="ends-on" name="endsOn" type="date" value="${schedule?.endsOn||''}"></div></div></div>
     <div id="date-fields" ${selectedKind!=='date'?'class="hidden"':''}><div class="field"><label for="on-date">Date</label><input id="on-date" name="onDate" type="date" value="${schedule?.date||ui.date}"></div></div>`:`<div class="notice">This new activity exists only on ${fmtDate(ui.date)}. It will not appear in the reusable library.</div>`}
+    ${mode==='library'?`<div id="day-target-controls" class="field hidden"><label class="customize-toggle"><input id="customize-by-day" type="checkbox"> Customize targets by day</label><p class="muted">Use different targets or set counts on selected weekdays. Start time stays shared.</p><div id="day-tabs" class="day-target-tabs hidden"></div><div id="copy-day-target" class="copy-target hidden"><label for="copy-source">Copy targets from</label><select id="copy-source"></select><button class="outline-button" type="button" data-copy-day>Copy to selected day</button></div></div>`:''}
+    <div id="amount-fields" ${selectedMethod!=='amount'?'class="hidden"':''}><div class="form-grid"><div class="field"><label for="unit">Unit</label><input id="unit" name="unit" value="${esc(existing?.unit||'reps')}" placeholder="reps, km, etc."></div><div class="field"><label>Targets · one minimum</label><div id="target-list">${targetRows(targetValues)}</div><button class="text-button" type="button" data-add-target>+ Add set / segment</button></div></div></div>
+    <div id="duration-fields" ${selectedMethod!=='duration'?'class="hidden"':''}><div class="field"><label for="duration-target">Target duration · hh:mm</label><input id="duration-target" name="targetDuration" inputmode="numeric" value="${existing?.targetMinutes!=null?fmtDuration(existing.targetMinutes):'00:30'}" placeholder="00:30"></div></div>
     <div class="form-actions"><button class="outline-button" type="button" data-cancel-editor>Cancel</button><button class="primary-button" type="submit">${existing?'Save changes':'Create activity'}</button></div>
   </form>`;
 }
@@ -385,8 +435,10 @@ function render() {
   $('#date-button').textContent=ui.date===today()?`Today · ${fmtDate(ui.date)} ▾`:`${fmtDate(ui.date)} ▾`;
   // Keep the live editor node while background sync/auth updates arrive.
   // Replacing it would clear text, targets, and the selected media file.
-  if(locked||ui.page!=='editor'||!$('#activity-form')||!$('#main').contains($('#activity-form')))
+  if(locked||ui.page!=='editor'||!$('#activity-form')||!$('#main').contains($('#activity-form'))) {
     $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
+    if(!locked&&ui.page==='editor')initDayTargets($('#activity-form'),ui.editingActivity?data.schedules.find(item=>item.activityId===ui.editingActivity):null);
+  }
   $('#add-button').classList.toggle('hidden',locked||ui.page!=='home'||isPast(ui.date));
   $('#storage-state').textContent=locked?'Locked':syncLabel();
 }
@@ -441,14 +493,29 @@ function readTargets(form) {
   if(!values.length||values.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Enter a positive target for every set or segment.');
   return values;
 }
+function parseDayTarget(raw,method) {
+  if(method==='amount') {
+    const targets=(raw.targets||[]).map(Number);
+    if(!targets.length||targets.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Enter a positive target for every set on every selected day.');
+    return {targets};
+  }
+  if(method==='duration') {
+    const targetMinutes=typeof raw.targetMinutes==='number'?raw.targetMinutes:parseDuration(String(raw.targetMinutes));
+    if(!Number.isInteger(targetMinutes)||targetMinutes<1)throw new Error('Enter a target duration for every selected day.');
+    return {targetMinutes};
+  }
+  return {};
+}
 async function saveActivity(form) {
   const values=new FormData(form), mode=form.dataset.mode, existing=form.dataset.id?activity(form.dataset.id):null;
   const method=values.get('method'), file=form._selectedMediaFile||values.get('media');
   if(file?.size && !file.type.startsWith('image/'))throw new Error('Choose an image or GIF.');
   const media=file?.size?await fileToDataUrl(file):existing?.media;
   if(!media)throw new Error('An image or GIF is required.');
-  const targets=method==='amount'?readTargets(form):[];
-  const targetMinutes=method==='duration'?parseDuration(String(values.get('targetDuration'))):null;
+  if(form._customDay)storeDayTarget(form);
+  const shared=form._customDay?parseDayTarget(form._sharedTarget,method):null;
+  const targets=method==='amount'?(shared?.targets||readTargets(form)):[];
+  const targetMinutes=method==='duration'?(shared?.targetMinutes??parseDuration(String(values.get('targetDuration')))):null;
   if(method==='duration'&&(!targetMinutes||targetMinutes<1))throw new Error('Enter a target duration in hh:mm.');
   const unit=method==='amount'?String(values.get('unit')).trim():null;
   if(method==='amount'&&!unit)throw new Error('Enter a unit such as reps or km.');
@@ -470,11 +537,14 @@ async function saveActivity(form) {
   const weekdays=kind==='weekdays'?values.getAll('weekday').map(Number):[];
   if(kind==='weekdays'&&!weekdays.length)throw new Error('Choose at least one weekday.');
   if(!startsOn||endsOn&&endsOn<startsOn)throw new Error('Check the schedule dates.');
+  const weekdayTargets={};
+  if(kind==='weekdays'&&form._customDay&&method!=='yes_no')for(const day of weekdays)
+    weekdayTargets[day]=parseDayTarget(form._dayTargets[day]||form._sharedTarget,method);
   if(existing)Object.assign(existing,base);
   else {data.activities.push({id:uid(),...base,archived:false});}
   const activityId=existing?.id||data.activities.at(-1).id;
-  if(schedule)Object.assign(schedule,{kind,date:onDate,weekdays,time,startsOn,endsOn});
-  else data.schedules.push({id:uid(),activityId,kind,date:onDate,weekdays,time,startsOn,endsOn});
+  if(schedule)Object.assign(schedule,{kind,date:onDate,weekdays,time,startsOn,endsOn,weekdayTargets});
+  else data.schedules.push({id:uid(),activityId,kind,date:onDate,weekdays,time,startsOn,endsOn,weekdayTargets});
   ui.page='activities';ui.editingActivity=null;await persist(existing?'Activity updated':'Activity created');
 }
 function editDate(row) {
@@ -559,6 +629,8 @@ async function handleClick(event) {
     if(target.dataset.editActivity){ui.editingActivity=target.dataset.editActivity;setPage('editor');return}
     if(target.dataset.cancelEditor!==undefined){setPage('activities');return}
     if(target.dataset.archiveActivity){const item=activity(target.dataset.archiveActivity);if(!item)return;materializeMissedDates();item.archived=true;ui.editingActivity=null;ui.page='activities';await persist('Activity archived');return}
+    if(target.dataset.dayTab){const form=target.closest('#activity-form');storeDayTarget(form);form._activeDay=Number(target.dataset.dayTab);showDayTarget(form);return}
+    if(target.dataset.copyDay!==undefined){const form=target.closest('#activity-form');storeDayTarget(form);const source=Number(form.querySelector('#copy-source').value);form._dayTargets[form._activeDay]=structuredClone(form._dayTargets[source]||form._sharedTarget);showDayTarget(form);toast(`Copied ${dayNames[source-1]} targets`);return}
     if(target.dataset.addTarget!==undefined){const list=target.closest('form').querySelector('#target-list');list.insertAdjacentHTML('beforeend',targetRows(['']));list.lastElementChild.querySelector('span').textContent=list.children.length;return}
     if(target.dataset.removeTarget!==undefined){const list=target.closest('#target-list');if(list.children.length<=1){toast('At least one target is required');return}target.closest('.target-editor').remove();[...list.children].forEach((child,index)=>{child.querySelector('span').textContent=index+1;child.querySelector('input').setAttribute('aria-label',`Target ${index+1}`)});return}
     if(target.dataset.expand){if(event.target.closest('.yes-no'))return;ui.expanded=ui.expanded===target.dataset.expand?null:target.dataset.expand;render();return}
@@ -616,7 +688,21 @@ async function handleChange(event) {
       return;
     }
     if(target.id==='timezone'){data.settings.timeZone=target.value;ui.date=today();materializeMissedDates();await persist('Time zone updated');return}
-    if(target.id==='method'||target.name==='kind'){changeMethodFields(target.closest('form'));return}
+    if(target.id==='customize-by-day'){
+      const form=target.closest('#activity-form');
+      if(target.checked){form._sharedTarget=currentDayTarget(form);form._customDay=true;form._activeDay=selectedWeekdays(form)[0];for(const day of selectedWeekdays(form))form._dayTargets[day]??=structuredClone(form._sharedTarget)}
+      else {storeDayTarget(form);form._customDay=false;form._dayTargets={};putTargetInputs(form,form._sharedTarget)}
+      showDayTarget(form);return;
+    }
+    if(target.name==='weekday'){const form=target.closest('#activity-form');storeDayTarget(form);showDayTarget(form);return}
+    if(target.id==='method'||target.name==='kind'){
+      const form=target.closest('form');changeMethodFields(form);
+      if(form.dataset.mode==='library'){
+        if(target.id==='method'){form._customDay=false;form._dayTargets={};form.querySelector('#customize-by-day').checked=false;form._sharedTarget=currentDayTarget(form)}
+        showDayTarget(form);
+      }
+      return;
+    }
   } catch(error){toast(error.message||'Could not update')}
 }
 document.addEventListener('click',handleClick);
