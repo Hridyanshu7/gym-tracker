@@ -200,7 +200,7 @@ function dateParts(date = new Date()) {
 }
 const today = () => dateParts().date;
 const isPast = date => date < today();
-const isBeforeStart = (date,time) => `${date}T${time}` > `${dateParts().date}T${dateParts().time}`;
+const isBeforeStart = (date,time) => !isPast(date) && (!time || `${date}T${time}` > `${dateParts().date}T${dateParts().time}`);
 const weekday = date => {const day=new Date(`${date}T12:00:00Z`).getUTCDay();return day===0?7:day};
 const nextDate = date => {const value=new Date(`${date}T12:00:00Z`);value.setUTCDate(value.getUTCDate()+1);return value.toISOString().slice(0,10)};
 const fmtDate = date => new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US',{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'});
@@ -234,7 +234,7 @@ function planFor(schedule,date) {
   const targetMinutes=change?.targetMinutes??dayTarget?.targetMinutes??source.targetMinutes??null;
   return {
     id:`virtual:${schedule.id}:${date}`, date, scheduleId:schedule.id, activityId:source.id,
-    time:change?.time||schedule.time, name:source.name, description:source.description,
+    time:change?.timeSet || change?.time != null ? change.time : schedule.time, name:source.name, description:source.description,
     categoryId:source.categoryId, categoryName:cat?.name||'Category', categoryEmoji:cat?.emoji||'🏋️',
     missionId:group?.id||null, missionName:group?.name||null, media:source.media,
     method:source.method, unit:source.unit||null,
@@ -248,7 +248,7 @@ function rowsFor(date) {
   const logs=data.logs.filter(log=>log.date===date);
   const loggedSchedules=new Set(logs.map(log=>log.scheduleId).filter(Boolean));
   const virtual=scheduleRows(date).filter(row=>!loggedSchedules.has(row.scheduleId));
-  return [...logs,...virtual].sort((a,b)=>a.time.localeCompare(b.time)||a.name.localeCompare(b.name));
+  return [...logs,...virtual].sort((a,b)=>(a.time==null)-(b.time==null)||(a.time||'').localeCompare(b.time||'')||a.name.localeCompare(b.name));
 }
 function makeLog(plan) {return {...plan,id:uid(),sets:plan.sets.map(set=>({...set})),createdAt:new Date().toISOString()}}
 function getOrCreateLog(row) {
@@ -263,7 +263,7 @@ function materializeMissedDates() {
     while(date<=end && (!schedule.endsOn||date<=schedule.endsOn) && guard++<3650) {
       if(!data.logs.some(log=>log.scheduleId===schedule.id&&log.date===date)) {
         const plan=planFor(schedule,date);
-        if(plan&&(date<end||!isBeforeStart(date,plan.time))){data.logs.push(makeLog(plan));changed=true}
+        if(plan&&(date<end||plan.time&&!isBeforeStart(date,plan.time))){data.logs.push(makeLog(plan));changed=true}
       }
       date=nextDate(date);
     }
@@ -295,12 +295,12 @@ function renderActivityRow(row) {
   if(row.method==='yes_no')inputs='<p>Use Yes or No in the compact row.</p>';
   const canEditPlan=!locked&&isBeforeStart(row.date,row.time);
   const action=row.method==='yes_no'?'':locked?'':`<button class="primary-button" type="button" data-done="${row.id}">${row.doneAt?'Update result':'Done'}</button>`;
-  return `<article class="activity-card ${expanded?'expanded':''}"><div class="activity-summary" role="button" tabindex="0" data-expand="${row.id}"><span class="time">${esc(row.time)}</span><span class="category-icon">${esc(row.categoryEmoji)}</span><span class="activity-copy"><strong>${esc(row.name)}</strong><small>${esc(row.description)}</small><em>${row.missionName?`${esc(row.missionName)} · `:''}${rowSummary(row)}</em></span><span class="activity-right">${quick}<span class="chevron">${expanded?'⌃':'⌄'}</span></span></div>${expanded?`<div class="activity-expanded"><img class="media-preview" src="${esc(row.media)}" alt="${esc(row.name)}"><div class="expanded-content"><p>${esc(row.description)}</p>${inputs}<div class="expanded-actions"><span>${canEditPlan?`<button class="text-button" type="button" data-edit-date="${row.id}">Edit this date</button>`:`<span class="muted">${locked?'Date locked':'Plan locked after start'}</span>`}</span>${action}</div></div></div>`:''}</article>`;
+  return `<article class="activity-card ${expanded?'expanded':''}"><div class="activity-summary" role="button" tabindex="0" data-expand="${row.id}"><span class="time">${esc(row.time||'Anytime')}</span><span class="category-icon">${esc(row.categoryEmoji)}</span><span class="activity-copy"><strong>${esc(row.name)}</strong><small>${esc(row.description)}</small><em>${row.missionName?`${esc(row.missionName)} · `:''}${rowSummary(row)}</em></span><span class="activity-right">${quick}<span class="chevron">${expanded?'⌃':'⌄'}</span></span></div>${expanded?`<div class="activity-expanded"><img class="media-preview" src="${esc(row.media)}" alt="${esc(row.name)}"><div class="expanded-content"><p>${esc(row.description)}</p>${inputs}<div class="expanded-actions"><span>${canEditPlan?`<button class="text-button" type="button" data-edit-date="${row.id}">Edit this date</button>`:`<span class="muted">${locked?'Date locked':'Plan locked after start'}</span>`}</span>${action}</div></div></div>`:''}</article>`;
 }
 function renderHome() {
   const selected=ui.date, rows=rowsFor(selected), locked=isPast(selected);
   const recorded=rows.filter(row=>row.method==='yes_no'?row.yesNo!=null:row.method==='duration'?row.actualMinutes!=null:row.sets.some(set=>set.actual!=null)).length;
-  return `${pageHead('Your day',selected===today()?'Today, '+fmtDate(selected):fmtDate(selected),locked?'Locked · results cannot be changed':'Activities in start-time order')}
+  return `${pageHead('Your day',selected===today()?'Today, '+fmtDate(selected):fmtDate(selected),locked?'Locked · results cannot be changed':'Timed activities first · Anytime after')}
   <div class="stats"><div class="stat"><strong>${rows.length}</strong><span>Planned</span></div><div class="stat"><strong>${recorded}</strong><span>Recorded</span></div></div>
   <div class="section-heading"><span>Timeline</span><span class="status-pill ${locked?'muted':''}">${locked?'🔒 Locked':selected===today()?'● Today':'Upcoming'}</span></div>
   ${rows.length?rows.map(renderActivityRow).join(''):`<div class="empty"><strong>Nothing planned for this date</strong><p>Use + to add an activity for this date, or create a repeating activity in Activities.</p></div>`}`;
@@ -411,7 +411,7 @@ function activityEditor(mode='library',existing=null) {
   return `<form id="activity-form" data-mode="${mode}" data-id="${existing?.id||''}">
     <div class="form-grid"><div class="field"><label for="activity-name">Activity name</label><input id="activity-name" name="name" required value="${esc(existing?.name||'')}" placeholder="e.g. Bench press"></div><div class="field"><label for="category-id">Category</label><select id="category-id" name="categoryId" required>${data.categories.filter(item=>!item.archived||item.id===selectedCategory).map(item=>`<option value="${item.id}" ${item.id===selectedCategory?'selected':''}>${esc(item.emoji)} ${esc(item.name)}</option>`).join('')}</select></div></div>
     <div class="field"><label for="description">One-line description</label><input id="description" name="description" required maxlength="160" value="${esc(existing?.description||'')}" placeholder="A short cue for this activity"></div>
-    <div class="form-grid"><div class="field"><label for="mission-id">Mission · optional</label><select id="mission-id" name="missionId"><option value="">No Mission</option>${data.missions.filter(item=>!item.archived||item.id===selectedMission).map(item=>`<option value="${item.id}" ${item.id===selectedMission?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label for="activity-time">Start time</label><input id="activity-time" name="time" type="time" required value="${esc(schedule?.time||'07:00')}"></div></div>
+    <div class="form-grid"><div class="field"><label for="mission-id">Mission · optional</label><select id="mission-id" name="missionId"><option value="">No Mission</option>${data.missions.filter(item=>!item.archived||item.id===selectedMission).map(item=>`<option value="${item.id}" ${item.id===selectedMission?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label for="activity-time">Start time · optional</label><input id="activity-time" name="time" type="time" value="${esc(schedule?.time||'')}"></div></div>
     <div class="field"><label for="activity-media">Image or GIF · required</label>${existing?`<img class="media-preview" src="${esc(existing.media)}" alt="Activity media" style="max-width:160px;height:100px">`:`<div class="media-choices"><input id="activity-media" name="media" type="file" accept="image/*" required><button class="outline-button" type="button" data-paste-media>Paste image</button></div><p class="muted">You can also press Ctrl/⌘+V while this form is open.</p><img class="media-preview hidden" id="new-media-preview" alt="Selected activity image"><p id="media-feedback" class="muted" role="status"></p>`}</div>
     <div class="field"><label for="method">Tracking method</label><select id="method" name="method"><option value="amount" ${selectedMethod==='amount'?'selected':''}>Amount / target</option><option value="duration" ${selectedMethod==='duration'?'selected':''}>Duration</option><option value="yes_no" ${selectedMethod==='yes_no'?'selected':''}>Yes / No</option></select></div>
     ${mode==='library'?`<div class="field"><label>Schedule</label><div class="radio-row"><label><input type="radio" name="kind" value="weekdays" ${selectedKind==='weekdays'?'checked':''}> Selected weekdays</label><label><input type="radio" name="kind" value="date" ${selectedKind==='date'?'checked':''}> One date</label></div></div>
@@ -452,7 +452,7 @@ function addChoice() {
 }
 function addExisting() {
   const options=data.activities.filter(item=>!item.archived).map(item=>`<option value="${item.id}">${esc(item.name)}</option>`).join('');
-  openModal('Choose activity',options?`<form id="existing-form"><div class="field"><label for="existing-activity">Activity</label><select id="existing-activity" name="activityId">${options}</select></div><div class="field"><label for="existing-time">Start time</label><input id="existing-time" type="time" name="time" required value="18:00"></div><div class="form-actions"><button class="outline-button" type="button" data-back-add>Back</button><button class="primary-button" type="submit">Add to date</button></div></form>`:`<div class="empty"><strong>No reusable activities yet</strong><p>Create one in Activities, or make a new date-only activity here.</p></div><button class="outline-button" type="button" data-back-add>Back</button>`);
+  openModal('Choose activity',options?`<form id="existing-form"><div class="field"><label for="existing-activity">Activity</label><select id="existing-activity" name="activityId">${options}</select></div><div class="field"><label for="existing-time">Start time · optional</label><input id="existing-time" type="time" name="time"></div><div class="form-actions"><button class="outline-button" type="button" data-back-add>Back</button><button class="primary-button" type="submit">Add to date</button></div></form>`:`<div class="empty"><strong>No reusable activities yet</strong><p>Create one in Activities, or make a new date-only activity here.</p></div><button class="outline-button" type="button" data-back-add>Back</button>`);
 }
 function addNew() {openModal('New activity for this date',activityEditor('date-only'))}
 function fileToDataUrl(file) {
@@ -519,11 +519,11 @@ async function saveActivity(form) {
   if(method==='duration'&&(!targetMinutes||targetMinutes<1))throw new Error('Enter a target duration in hh:mm.');
   const unit=method==='amount'?String(values.get('unit')).trim():null;
   if(method==='amount'&&!unit)throw new Error('Enter a unit such as reps or km.');
-  const time=String(values.get('time'));
+  const time=String(values.get('time')||'').trim()||null;
   const base={name:String(values.get('name')).trim(),description:String(values.get('description')).trim(),categoryId:String(values.get('categoryId')),missionId:String(values.get('missionId'))||null,media,method,unit,targets,targetMinutes};
   if(!base.name||!base.description)throw new Error('Name and description are required.');
   if(mode==='date-only') {
-    if(!isBeforeStart(ui.date,time))throw new Error('Choose a start time that has not passed.');
+    if(!isBeforeStart(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
     const cat=category(base.categoryId),group=mission(base.missionId);
     data.logs.push({id:uid(),date:ui.date,time,activityId:null,scheduleId:null,...base,categoryName:cat.name,categoryEmoji:cat.emoji,missionName:group?.name||null,sets:targets.map(target=>({target,actual:null})),actualMinutes:null,yesNo:null,doneAt:null,createdAt:new Date().toISOString()});
     closeModal();ui.page='home';await persist('Activity added to this date');return;
@@ -551,14 +551,14 @@ function editDate(row) {
   if(!isBeforeStart(row.date,row.time)){toast('Planning closes at the activity start time');return}
   const missionOptions=`<option value="">No Mission</option>${data.missions.filter(item=>!item.archived).map(item=>`<option value="${item.id}" ${item.id===row.missionId?'selected':''}>${esc(item.name)}</option>`).join('')}`;
   const targetInput=row.method==='amount'?`<div class="field"><label>Targets</label>${row.sets.map((set,index)=>`<div class="target-editor"><span>${index+1}</span><input class="exception-target" type="number" min="0.001" step="any" value="${esc(set.target)}"></div>`).join('')}</div>`:row.method==='duration'?`<div class="field"><label for="exception-duration">Target duration · hh:mm</label><input id="exception-duration" value="${fmtDuration(row.targetMinutes)}"></div>`:'';
-  openModal('Edit this date',`<form id="exception-form" data-id="${row.id}"><div class="field"><label for="exception-time">Start time</label><input id="exception-time" name="time" type="time" required value="${esc(row.time)}"></div><div class="field"><label for="exception-mission">Mission · optional</label><select id="exception-mission" name="missionId">${missionOptions}</select></div>${targetInput}<div class="form-actions"><button class="outline-button" type="button" data-close-modal>Cancel</button><button class="primary-button" type="submit">Save this date</button></div></form>`);
+  openModal('Edit this date',`<form id="exception-form" data-id="${row.id}"><div class="field"><label for="exception-time">Start time · optional</label><input id="exception-time" name="time" type="time" value="${esc(row.time||'')}"></div><div class="field"><label for="exception-mission">Mission · optional</label><select id="exception-mission" name="missionId">${missionOptions}</select></div>${targetInput}<div class="form-actions"><button class="outline-button" type="button" data-close-modal>Cancel</button><button class="primary-button" type="submit">Save this date</button></div></form>`);
 }
 async function saveException(form) {
   const row=rowsFor(ui.date).find(item=>item.id===form.dataset.id);
   if(!row)throw new Error('Activity not found.');
   if(!isBeforeStart(row.date,row.time))throw new Error('This activity has already started.');
-  const time=String(new FormData(form).get('time'));
-  if(!isBeforeStart(row.date,time))throw new Error('Choose a future start time.');
+  const time=String(new FormData(form).get('time')||'').trim()||null;
+  if(!isBeforeStart(row.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
   const missionId=String(new FormData(form).get('missionId'))||null;
   const targets=row.method==='amount'?[...form.querySelectorAll('.exception-target')].map(input=>Number(input.value)):null;
   if(targets?.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Every target must be positive.');
@@ -567,7 +567,7 @@ async function saveException(form) {
   if(row.scheduleId) {
     let change=exception(row.scheduleId,row.date);
     if(!change){change={id:uid(),scheduleId:row.scheduleId,date:row.date};data.exceptions.push(change)}
-    Object.assign(change,{time,missionSet:true,missionId,targets,targetMinutes});
+    Object.assign(change,{time,timeSet:true,missionSet:true,missionId,targets,targetMinutes});
   }
   const log=data.logs.find(item=>item.id===row.id||item.scheduleId===row.scheduleId&&item.date===row.date);
   if(log){log.time=time;log.missionId=missionId;log.missionName=mission(missionId)?.name||null;if(targets)log.sets=targets.map((target,index)=>({target,actual:log.sets[index]?.actual??null}));if(targetMinutes)log.targetMinutes=targetMinutes}
@@ -661,8 +661,8 @@ async function handleSubmit(event) {
     if(form.id==='activity-form')await saveActivity(form);
     if(form.id==='exception-form')await saveException(form);
     if(form.id==='existing-form'){
-      const values=new FormData(form),time=String(values.get('time'));
-      if(!isBeforeStart(ui.date,time))throw new Error('Choose a start time that has not passed.');
+      const values=new FormData(form),time=String(values.get('time')||'').trim()||null;
+      if(!isBeforeStart(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
       const source=activity(String(values.get('activityId'))),cat=category(source.categoryId),group=mission(source.missionId);
       data.logs.push({id:uid(),date:ui.date,time,activityId:source.id,scheduleId:null,name:source.name,description:source.description,categoryId:source.categoryId,categoryName:cat.name,categoryEmoji:cat.emoji,missionId:source.missionId,missionName:group?.name||null,media:source.media,method:source.method,unit:source.unit,targets:[...source.targets],targetMinutes:source.targetMinutes,sets:source.targets.map(target=>({target,actual:null})),actualMinutes:null,yesNo:null,doneAt:null,createdAt:new Date().toISOString()});
       closeModal();await persist('Activity added to this date');
