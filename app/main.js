@@ -310,7 +310,7 @@ function renderActivities() {
   return `${pageHead('Library','Activities','Reusable activities, targets, media, and schedules.',`<button class="primary-button" type="button" data-new-activity>+ New activity</button>`)}
   <button class="outline-button" type="button" data-page="categories">Manage emoji categories</button>
   <div class="section-heading"><span>Active activities</span><span>${items.length}</span></div>
-  ${items.length?items.map(item=>{const cat=category(item.categoryId);return `<div class="list-card"><span class="icon">${esc(cat?.emoji||'🏋️')}</span><span class="details"><strong>${esc(item.name)}</strong><small>${esc(item.description)} · ${esc(item.method)}</small></span><button class="text-button" type="button" data-edit-activity="${item.id}">Edit</button></div>`}).join(''):`<div class="empty"><strong>No reusable activities yet</strong><p>Create one here with its target, image or GIF, and schedule.</p></div>`}`;
+  ${items.length?items.map(item=>{const cat=category(item.categoryId);return `<div class="list-card"><span class="icon">${esc(cat?.emoji||'🏋️')}</span><span class="details"><strong>${esc(item.name)}</strong><small><span class="category-name">${esc(cat?.name||'Uncategorized')}</span> · ${esc(item.description)} · ${esc(item.method)}</small></span><button class="text-button" type="button" data-edit-activity="${item.id}">Edit</button></div>`}).join(''):`<div class="empty"><strong>No reusable activities yet</strong><p>Create one here with its target, image or GIF, and schedule.</p></div>`}`;
 }
 function renderCategories() {
   const rows=data.categories.filter(item=>!item.archived);
