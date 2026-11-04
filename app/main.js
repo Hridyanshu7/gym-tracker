@@ -307,10 +307,28 @@ function renderHome() {
 }
 function renderActivities() {
   const items=data.activities.filter(item=>!item.archived).sort((a,b)=>a.name.localeCompare(b.name));
-  return `${pageHead('Library','Activities','Reusable activities, targets, media, and schedules.',`<button class="primary-button" type="button" data-new-activity>+ New activity</button>`)}
-  <button class="outline-button" type="button" data-page="categories">Manage emoji categories</button>
-  <div class="section-heading"><span>Active activities</span><span>${items.length}</span></div>
-  ${items.length?items.map(item=>{const cat=category(item.categoryId);return `<div class="list-card"><span class="icon">${esc(cat?.emoji||'🏋️')}</span><span class="details"><strong>${esc(item.name)}</strong><small><span class="category-name">${esc(cat?.name||'Uncategorized')}</span> · ${esc(item.description)} · ${esc(item.method)}</small></span><button class="text-button" type="button" data-edit-activity="${item.id}">Edit</button></div>`}).join(''):`<div class="empty"><strong>No reusable activities yet</strong><p>Create one here with its target, image or GIF, and schedule.</p></div>`}`;
+  const dayNames=['M','T','W','T','F','S','S'];
+  const rows=items.map(item=>{
+    const cat=category(item.categoryId),schedule=data.schedules.find(row=>row.activityId===item.id);
+    const day=weekday(ui.date),displayDay=schedule?.kind==='weekdays'?(schedule.weekdays.includes(day)?day:schedule.weekdays[0]):day;
+    const planned=schedule?.weekdayTargets?.[displayDay];
+    const targets=planned?.targets||item.targets||[];
+    const duration=planned?.targetMinutes??item.targetMinutes;
+    const varies=schedule?.kind==='weekdays'&&Object.values(schedule.weekdayTargets||{}).some(value=>
+      JSON.stringify(value?.targets||[])!==JSON.stringify(item.targets||[])||value?.targetMinutes!=null&&value.targetMinutes!==item.targetMinutes);
+    const type=item.method==='duration'?'duration':item.method==='yes_no'?'yesno':item.unit?.toLowerCase()==='reps'?'reps':'amount';
+    const metric=type==='reps'?`<div class="library-metric"><span class="metric-label">Sets × reps</span>${targets.map((value,index)=>`<span class="set-chip">${index+1} <b>${esc(value)}</b></span>`).join('')}<span class="metric-unit">reps</span></div>`:
+      type==='duration'?`<div class="library-metric"><span class="metric-label">Duration</span><span class="duration-value">◷ ${fmtDuration(duration)}</span><span class="metric-unit">hh:mm</span></div>`:
+      type==='amount'?`<div class="library-metric"><span class="metric-label">Amount</span><span class="amount-value">${esc(targets.join(' / '))} <small>${esc(item.unit||'units')}</small></span></div>`:
+      '<div class="library-metric"><span class="metric-label">Completion</span><span class="boolean-value">✓ Yes / No</span></div>';
+    const days=schedule?.kind==='weekdays'?`<div class="library-days" aria-label="Scheduled weekdays">${dayNames.map((name,index)=>`<span class="${schedule.weekdays.includes(index+1)?'on':''}" title="${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][index]}">${name}</span>`).join('')}</div>`:
+      `<div class="library-days single">${schedule?.date?`Once · ${esc(fmtDate(schedule.date))}`:'No schedule'}</div>`;
+    return `<article class="library-card ${type}"><div class="library-identity"><span class="library-emoji">${esc(cat?.emoji||'🏋️')}</span><div><strong>${esc(item.name)}</strong><small>${esc(cat?.name||'Uncategorized')} · ${esc(schedule?.time||'Anytime')}${varies?` · ${['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'][displayDay]} target shown`:''}</small></div></div>${metric}${days}<button class="library-edit" type="button" data-edit-activity="${item.id}" aria-label="Edit ${esc(item.name)}">Edit</button></article>`;
+  });
+  return `<div class="library-page">${pageHead('Library','Activities','See what is planned, when, and how much at a glance.',`<button class="primary-button" type="button" data-new-activity>+ New activity</button>`)}
+  <div class="library-rows">${rows.length?rows.join(''):`<div class="empty"><strong>No reusable activities yet</strong><p>Create one here with its target, image or GIF, and schedule.</p></div>`}</div>
+  <div class="library-footer"><span>Each activity shows its current plan. Past logs stay unchanged.</span><button type="button" data-page="categories">Manage categories →</button></div>
+  <button class="library-mobile-add" type="button" data-new-activity>+ New activity</button></div>`;
 }
 function renderCategories() {
   const rows=data.categories.filter(item=>!item.archived);
