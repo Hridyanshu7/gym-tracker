@@ -430,7 +430,7 @@ function activityEditor(mode='library',existing=null) {
     <div class="form-grid"><div class="field"><label for="activity-name">Activity name</label><input id="activity-name" name="name" required value="${esc(existing?.name||'')}" placeholder="e.g. Bench press"></div><div class="field"><label for="category-id">Category</label><select id="category-id" name="categoryId" required>${data.categories.filter(item=>!item.archived||item.id===selectedCategory).map(item=>`<option value="${item.id}" ${item.id===selectedCategory?'selected':''}>${esc(item.emoji)} ${esc(item.name)}</option>`).join('')}</select></div></div>
     <div class="field"><label for="description">One-line description</label><input id="description" name="description" required maxlength="160" value="${esc(existing?.description||'')}" placeholder="A short cue for this activity"></div>
     <div class="form-grid"><div class="field"><label for="mission-id">Mission · optional</label><select id="mission-id" name="missionId"><option value="">No Mission</option>${data.missions.filter(item=>!item.archived||item.id===selectedMission).map(item=>`<option value="${item.id}" ${item.id===selectedMission?'selected':''}>${esc(item.name)}</option>`).join('')}</select></div><div class="field"><label for="activity-time">Start time · optional</label><input id="activity-time" name="time" type="time" value="${esc(schedule?.time||'')}"></div></div>
-    <div class="field"><label for="activity-media">Image or GIF · required</label>${existing?`<img class="media-preview" src="${esc(existing.media)}" alt="Activity media" style="max-width:160px;height:100px">`:`<div class="media-choices"><input id="activity-media" name="media" type="file" accept="image/*" required><button class="outline-button" type="button" data-paste-media>Paste image</button></div><p class="muted">You can also press Ctrl/⌘+V while this form is open.</p><img class="media-preview hidden" id="new-media-preview" alt="Selected activity image"><p id="media-feedback" class="muted" role="status"></p>`}</div>
+    <div class="field media-link-field"><label for="activity-media-url">Image or GIF link ${existing?'· leave blank to keep current image':'· required'}</label><div class="media-link-row"><input id="activity-media-url" name="mediaUrl" type="url" inputmode="url" placeholder="https://example.com/exercise.gif" ${existing?'':'required'} aria-describedby="media-link-help media-feedback"><button class="outline-button" type="button" data-paste-media-link>Paste link</button></div><p id="media-link-help" class="muted">From Google Images, use Copy image address. A search-result or Pinterest page link will not work.</p><img class="media-preview ${existing?'':'hidden'}" id="activity-media-preview" src="${esc(existing?.media||'')}" alt="Activity image preview"><p id="media-feedback" class="muted" role="status">${existing?'Current image shown. Paste a new link to replace it.':'Paste a link to preview the image before saving.'}</p></div>
     <div class="field"><label for="method">Tracking method</label><select id="method" name="method"><option value="amount" ${selectedMethod==='amount'?'selected':''}>Amount / target</option><option value="duration" ${selectedMethod==='duration'?'selected':''}>Duration</option><option value="yes_no" ${selectedMethod==='yes_no'?'selected':''}>Yes / No</option></select></div>
     ${mode==='library'?`<div class="field"><label>Schedule</label><div class="radio-row"><label><input type="radio" name="kind" value="weekdays" ${selectedKind==='weekdays'?'checked':''}> Selected weekdays</label><label><input type="radio" name="kind" value="date" ${selectedKind==='date'?'checked':''}> One date</label></div></div>
     <div id="weekdays-fields" ${selectedKind!=='weekdays'?'class="hidden"':''}><div class="field"><label>Days of week · one shared start time</label><div class="weekday-row">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((name,index)=>`<label><input type="checkbox" name="weekday" value="${index+1}" ${(schedule?.weekdays||[]).includes(index+1)?'checked':''}>${name}</label>`).join('')}</div></div><div class="form-grid"><div class="field"><label for="starts-on">Starts on</label><input id="starts-on" name="startsOn" type="date" value="${schedule?.startsOn||today()}"></div><div class="field"><label for="ends-on">Ends on · optional</label><input id="ends-on" name="endsOn" type="date" value="${schedule?.endsOn||''}"></div></div></div>
@@ -452,7 +452,7 @@ function render() {
   $('#date-picker').value=ui.date;
   $('#date-button').textContent=ui.date===today()?`Today · ${fmtDate(ui.date)} ▾`:`${fmtDate(ui.date)} ▾`;
   // Keep the live editor node while background sync/auth updates arrive.
-  // Replacing it would clear text, targets, and the selected media file.
+  // Replacing it would clear text, targets, and the media link preview.
   if(locked||ui.page!=='editor'||!$('#activity-form')||!$('#main').contains($('#activity-form'))) {
     $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
     if(!locked&&ui.page==='editor')initDayTargets($('#activity-form'),ui.editingActivity?data.schedules.find(item=>item.activityId===ui.editingActivity):null);
@@ -476,35 +476,74 @@ function addNew() {openModal('New activity for this date',activityEditor('date-o
 function fileToDataUrl(file) {
   return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file)});
 }
-async function setActivityMedia(form,file,source) {
-  if(!file||!file.type.startsWith('image/')||!file.size)throw new Error('Clipboard must contain an image or GIF.');
-  const input=form.querySelector('#activity-media');
-  if(!input)return;
-  form._selectedMediaFile=file;
-  if(source==='paste'){input.value='';input.required=false}
-  else input.required=true;
-  const preview=form.querySelector('#new-media-preview');
-  const feedback=form.querySelector('#media-feedback');
-  feedback.textContent=source==='paste'?'Image pasted · ready to save':`${file.name} · ready to save`;
-  const image=await fileToDataUrl(file);
-  if(!form.isConnected||form._selectedMediaFile!==file)return;
-  preview.src=image;
-  preview.classList.remove('hidden');
+function mediaLink(form) {
+  const value=form.querySelector('#activity-media-url').value.trim();
+  if(!value)return null;
+  let url;
+  try {url=new URL(value)} catch {throw new Error('Enter a valid image or GIF link.');}
+  if(!['http:','https:'].includes(url.protocol))throw new Error('Use an http:// or https:// image link.');
+  if(/(^|\.)pinterest\.[a-z.]+$/i.test(url.hostname))throw new Error('This is a Pinterest page. Open the image and copy its image address.');
+  return url.href;
 }
-async function pasteActivityMedia(form) {
-  if(!navigator.clipboard?.read)throw new Error('Clipboard button is unavailable here. Use Ctrl/⌘+V or choose a file.');
-  let items;
-  try {items=await navigator.clipboard.read()}
-  catch {throw new Error('Clipboard access was blocked. Use Ctrl/⌘+V or choose a file.')}
-  for(const item of items) {
-    const type=item.types.find(type=>type.startsWith('image/'));
-    if(!type)continue;
-    const blob=await item.getType(type);
-    const file=new File([blob],`pasted-image.${type.split('/')[1]||'png'}`,{type});
-    await setActivityMedia(form,file,'paste');
-    return;
-  }
-  throw new Error('No image found on the clipboard. Copy an image, then try again.');
+function imageDecodes(source) {
+  return new Promise((resolve,reject)=>{const image=new Image();image.onload=resolve;image.onerror=()=>reject(new Error('The link did not return a displayable image or GIF.'));image.src=source});
+}
+async function imageMime(blob) {
+  const bytes=new Uint8Array(await blob.slice(0,16).arrayBuffer());
+  const text=(start,end)=>String.fromCharCode(...bytes.slice(start,end));
+  if(bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return 'image/jpeg';
+  if(bytes[0]===0x89&&text(1,4)==='PNG')return 'image/png';
+  if(text(0,3)==='GIF')return 'image/gif';
+  if(text(0,4)==='RIFF'&&text(8,12)==='WEBP')return 'image/webp';
+  if(text(4,12)==='ftypavif'||text(4,12)==='ftypavis')return 'image/avif';
+  throw new Error('The link must return a JPG, PNG, GIF, WebP, or AVIF image.');
+}
+async function loadActivityMediaLink(form) {
+  const feedback=form.querySelector('#media-feedback');
+  let url;
+  try {url=mediaLink(form)}
+  catch(error){feedback.textContent=error.message;feedback.classList.add('media-error');throw error}
+  if(!url)return null;
+  if(form._mediaUrl===url&&form._mediaData)return form._mediaData;
+  if(form._mediaRequest?.url===url)return form._mediaRequest.promise;
+  const sequence=(form._mediaSequence||0)+1;
+  form._mediaSequence=sequence;
+  feedback.textContent='Checking image link…';feedback.classList.remove('media-error');
+  const promise=(async()=>{
+    let response;
+    try {response=await fetch(url,{mode:'cors',redirect:'follow'})}
+    catch {throw new Error('This site blocks importing its image. Try a direct image address from another source.');}
+    if(!response.ok)throw new Error(`Image link returned HTTP ${response.status}.`);
+    const blob=await response.blob();
+    if(!blob.size||blob.size>10*1024*1024)throw new Error('The image must be under 10 MB.');
+    const mime=await imageMime(blob);
+    const image=await fileToDataUrl(new Blob([blob],{type:mime}));
+    await imageDecodes(image);
+    if(form._mediaSequence===sequence&&form.isConnected){
+      form._mediaUrl=url;form._mediaData=image;
+      const preview=form.querySelector('#activity-media-preview');preview.src=image;preview.classList.remove('hidden');
+      feedback.textContent='Image ready to save';feedback.classList.remove('media-error');
+    }
+    return image;
+  })();
+  form._mediaRequest={url,promise};
+  try {return await promise}
+  catch(error){if(form._mediaSequence===sequence&&form.isConnected){feedback.textContent=error.message;feedback.classList.add('media-error')}throw error}
+  finally {if(form._mediaRequest?.promise===promise)form._mediaRequest=null}
+}
+async function pasteActivityMediaLink(form) {
+  if(!navigator.clipboard?.readText)throw new Error('Paste the image address into the field with Ctrl/⌘+V.');
+  let value;
+  try {value=await navigator.clipboard.readText()}
+  catch {throw new Error('Clipboard access was blocked. Paste the link with Ctrl/⌘+V.');}
+  const input=form.querySelector('#activity-media-url');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();
+}
+function resetActivityMediaPreview(form) {
+  form._mediaSequence=(form._mediaSequence||0)+1;form._mediaData=null;form._mediaUrl=null;form._mediaRequest=null;
+  const preview=form.querySelector('#activity-media-preview');
+  const existing=form.dataset.id?activity(form.dataset.id):null;
+  preview.src=existing?.media||'';preview.classList.toggle('hidden',!existing?.media);
+  const feedback=form.querySelector('#media-feedback');feedback.textContent=existing?'Current image shown. Paste a new link to replace it.':'Paste a link to preview the image before saving.';feedback.classList.remove('media-error');
 }
 function readTargets(form) {
   const values=[...form.querySelectorAll('.target-value')].map(input=>Number(input.value));
@@ -526,10 +565,9 @@ function parseDayTarget(raw,method) {
 }
 async function saveActivity(form) {
   const values=new FormData(form), mode=form.dataset.mode, existing=form.dataset.id?activity(form.dataset.id):null;
-  const method=values.get('method'), file=form._selectedMediaFile||values.get('media');
-  if(file?.size && !file.type.startsWith('image/'))throw new Error('Choose an image or GIF.');
-  const media=file?.size?await fileToDataUrl(file):existing?.media;
-  if(!media)throw new Error('An image or GIF is required.');
+  const method=values.get('method'),mediaUrl=String(values.get('mediaUrl')||'').trim();
+  const media=mediaUrl?await loadActivityMediaLink(form):existing?.media;
+  if(!media)throw new Error('An image or GIF link is required.');
   if(form._customDay)storeDayTarget(form);
   const shared=form._customDay?parseDayTarget(form._sharedTarget,method):null;
   const targets=method==='amount'?(shared?.targets||readTargets(form)):[];
@@ -558,7 +596,7 @@ async function saveActivity(form) {
   const weekdayTargets={};
   if(kind==='weekdays'&&form._customDay&&method!=='yes_no')for(const day of weekdays)
     weekdayTargets[day]=parseDayTarget(form._dayTargets[day]||form._sharedTarget,method);
-  if(existing)Object.assign(existing,base);
+  if(existing){Object.assign(existing,base);if(mediaUrl)existing.mediaPath=null;}
   else {data.activities.push({id:uid(),...base,archived:false});}
   const activityId=existing?.id||data.activities.at(-1).id;
   if(schedule)Object.assign(schedule,{kind,date:onDate,weekdays,time,startsOn,endsOn,weekdayTargets});
@@ -657,7 +695,7 @@ async function handleClick(event) {
     if(target.dataset.editDate){editDate(rowsFor(ui.date).find(row=>row.id===target.dataset.editDate));return}
     if(target.dataset.addCategory!==undefined||target.dataset.editCategory){editCategory(target.dataset.editCategory?category(target.dataset.editCategory):null);return}
     if(target.dataset.openEmoji!==undefined){await toggleEmojiPicker();return}
-    if(target.dataset.pasteMedia!==undefined){await pasteActivityMedia(target.closest('#activity-form'));return}
+    if(target.dataset.pasteMediaLink!==undefined){await pasteActivityMediaLink(target.closest('#activity-form'));return}
     if(target.dataset.addMission!==undefined||target.dataset.editMission){const existing=target.dataset.editMission?mission(target.dataset.editMission):null;const name=prompt('Mission name',existing?.name||'');if(name===null)return;if(!name.trim())throw new Error('Mission name is required.');if(existing)existing.name=name.trim();else data.missions.push({id:uid(),name:name.trim(),archived:false});await persist('Mission saved');return}
   } catch(error){toast(error.message||'Could not save change')}
 }
@@ -699,12 +737,6 @@ async function handleChange(event) {
   const target=event.target;
   try {
     if(target.id==='date-picker'){if(target.value){ui.date=target.value;ui.expanded=null;render()}return}
-    if(target.id==='activity-media'){
-      const form=target.closest('#activity-form');
-      if(target.files?.[0])await setActivityMedia(form,target.files[0],'upload');
-      else {form._selectedMediaFile=null;target.required=true;form.querySelector('#new-media-preview').classList.add('hidden');form.querySelector('#media-feedback').textContent=''}
-      return;
-    }
     if(target.id==='timezone'){data.settings.timeZone=target.value;ui.date=today();materializeMissedDates();await persist('Time zone updated');return}
     if(target.id==='customize-by-day'){
       const form=target.closest('#activity-form');
@@ -726,14 +758,12 @@ async function handleChange(event) {
 document.addEventListener('click',handleClick);
 document.addEventListener('submit',handleSubmit);
 document.addEventListener('change',handleChange);
-document.addEventListener('paste',event=>{
-  const form=event.target.closest('#activity-form')||document.querySelector('#modal #activity-form')||document.querySelector('#main #activity-form');
-  if(!form?.querySelector('#activity-media'))return;
-  const item=[...(event.clipboardData?.items||[])].find(item=>item.type.startsWith('image/'));
-  if(!item)return;
-  event.preventDefault();
-  const file=item.getAsFile();
-  if(file)setActivityMedia(form,file,'paste').catch(error=>toast(error.message||'Could not paste image'));
+document.addEventListener('input',event=>{
+  if(event.target.id!=='activity-media-url')return;
+  const form=event.target.closest('#activity-form');resetActivityMediaPreview(form);
+  if(!event.target.value.trim())return;
+  clearTimeout(form._mediaTimer);
+  form._mediaTimer=setTimeout(()=>loadActivityMediaLink(form).catch(()=>{}),500);
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'){closeModal();$('#drawer-backdrop').classList.add('hidden')}

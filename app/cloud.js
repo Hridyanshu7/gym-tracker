@@ -34,8 +34,8 @@ async function uploadMedia(record) {
   if(record.mediaPath) return record.mediaPath;
   if(!record.media?.startsWith('data:image/')) throw new Error('Image or GIF is missing.');
   const mime=record.media.slice(5,record.media.indexOf(';'));
-  const ext=mime==='image/jpeg'?'jpg':mime==='image/png'?'png':mime==='image/gif'?'gif':mime==='image/webp'?'webp':'img';
-  const path=`${record.id}.${ext}`;
+  const ext=mime==='image/jpeg'?'jpg':mime==='image/png'?'png':mime==='image/gif'?'gif':mime==='image/webp'?'webp':mime==='image/avif'?'avif':'img';
+  const path=`${record.id}-${crypto.randomUUID()}.${ext}`;
   const blob=await (await fetch(record.media)).blob();
   const uploaded=await cloud.storage.from('activity-media').upload(path,blob,{contentType:mime,upsert:false});
   if(uploaded.error && String(uploaded.error.statusCode)!=='409') throw uploaded.error;

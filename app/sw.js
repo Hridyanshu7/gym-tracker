@@ -1,4 +1,4 @@
-const CACHE = 'stride-shell-v11';
+const CACHE = 'stride-shell-v12';
 const FILES = ['./', './index.html', './style.css', './build.js', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(FILES)));
