@@ -1,5 +1,6 @@
 import {cloud, entityKey, importActivityImage, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
 import {APP_AUTH_EMAIL} from './config.js';
+import {isLockedDate as dateIsLocked, isCorrectionDate as dateIsCorrection} from './day-window.js';
 import {adoptCloudOccurrence, reconcilePendingLogs} from './reconcile.js';
 
 const DB_NAME = 'stride-local-v1';
@@ -46,6 +47,7 @@ let unlocked=false;
 let syncing=false;
 let syncTimer;
 let syncError='';
+let lastCalendarDate=null;
 const ui = {page:'home',date:'',expanded:null,editingActivity:null,modal:null};
 const arrays={category_legend:'categories',missions:'missions',activities:'activities',schedules:'schedules',schedule_exceptions:'exceptions',activity_logs:'logs'};
 function syncMeta() {
@@ -200,7 +202,11 @@ function dateParts(date = new Date()) {
 }
 const today = () => dateParts().date;
 const isPast = date => date < today();
+const isLockedDate = date => dateIsLocked(date,today());
+const isCorrectionDate = date => dateIsCorrection(date,today());
 const isBeforeStart = (date,time) => !isPast(date) && (!time || `${date}T${time}` > `${dateParts().date}T${dateParts().time}`);
+const canChangeDatePlan = (date,time) => isCorrectionDate(date) || isBeforeStart(date,time);
+const canAddToDate = (date,time) => isCorrectionDate(date) || isBeforeStart(date,time);
 const weekday = date => {const day=new Date(`${date}T12:00:00Z`).getUTCDay();return day===0?7:day};
 const nextDate = date => {const value=new Date(`${date}T12:00:00Z`);value.setUTCDate(value.getUTCDate()+1);return value.toISOString().slice(0,10)};
 const fmtDate = date => new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US',{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'});
@@ -287,22 +293,22 @@ function resultStatus(row) {
 }
 function renderActivityRow(row) {
   const expanded=ui.expanded===row.id;
-  const locked=isPast(row.date);
+  const locked=isLockedDate(row.date);
   const quick=row.method==='yes_no'?`<div class="yes-no" role="group" aria-label="${esc(row.name)} result"><button type="button" data-answer="yes" data-id="${row.id}" class="${row.yesNo===true?'chosen':''}" ${locked?'disabled':''}>Yes</button><button type="button" data-answer="no" data-id="${row.id}" class="${row.yesNo===false?'chosen':''}" ${locked?'disabled':''}>No</button></div>`:`<span class="status-pill ${resultStatus(row)==='Pending'?'muted':resultStatus(row)==='Skipped'?'warn':''}">${esc(resultStatus(row))}</span>`;
   let inputs='';
   if(row.method==='amount')inputs=row.sets.map((set,index)=>`<div class="set-row"><strong>${row.unit==='reps'?`Set ${index+1}`:'Amount'}</strong><span>Target ${esc(set.target)} ${esc(row.unit)}</span><input class="actual-set" type="number" min="0" step="any" value="${set.actual??''}" placeholder="Actual" ${locked?'disabled':''} aria-label="Actual ${esc(row.unit)} for segment ${index+1}"></div>`).join('');
   if(row.method==='duration')inputs=`<div class="set-row"><strong>Time</strong><span>Target ${fmtDuration(row.targetMinutes)}</span><input id="actual-duration" value="${row.actualMinutes==null?'':fmtDuration(row.actualMinutes)}" placeholder="hh:mm" inputmode="numeric" ${locked?'disabled':''} aria-label="Actual duration"></div>`;
   if(row.method==='yes_no')inputs='<p>Use Yes or No in the compact row.</p>';
-  const canEditPlan=!locked&&isBeforeStart(row.date,row.time);
+  const canEditPlan=canChangeDatePlan(row.date,row.time);
   const action=row.method==='yes_no'?'':locked?'':`<button class="primary-button" type="button" data-done="${row.id}">${row.doneAt?'Update result':'Done'}</button>`;
   return `<article class="activity-card ${expanded?'expanded':''}"><div class="activity-summary" role="button" tabindex="0" data-expand="${row.id}"><span class="time">${esc(row.time||'Anytime')}</span><span class="category-icon">${esc(row.categoryEmoji)}</span><span class="activity-copy"><strong>${esc(row.name)}</strong><small>${esc(row.description)}</small><em>${row.missionName?`${esc(row.missionName)} · `:''}${rowSummary(row)}</em></span><span class="activity-right">${quick}<span class="chevron">${expanded?'⌃':'⌄'}</span></span></div>${expanded?`<div class="activity-expanded"><img class="media-preview" src="${esc(row.media)}" alt="${esc(row.name)}"><div class="expanded-content"><p>${esc(row.description)}</p>${inputs}<div class="expanded-actions"><span>${canEditPlan?`<button class="text-button" type="button" data-edit-date="${row.id}">Edit this date</button>`:`<span class="muted">${locked?'Date locked':'Plan locked after start'}</span>`}</span>${action}</div></div></div>`:''}</article>`;
 }
 function renderHome() {
-  const selected=ui.date, rows=rowsFor(selected), locked=isPast(selected);
+  const selected=ui.date, rows=rowsFor(selected), locked=isLockedDate(selected);
   const recorded=rows.filter(row=>row.method==='yes_no'?row.yesNo!=null:row.method==='duration'?row.actualMinutes!=null:row.sets.some(set=>set.actual!=null)).length;
   return `${pageHead('Your day',selected===today()?'Today, '+fmtDate(selected):fmtDate(selected),locked?'Locked · results cannot be changed':'Timed activities first · Anytime after')}
   <div class="stats"><div class="stat"><strong>${rows.length}</strong><span>Planned</span></div><div class="stat"><strong>${recorded}</strong><span>Recorded</span></div></div>
-  <div class="section-heading"><span>Timeline</span><span class="status-pill ${locked?'muted':''}">${locked?'🔒 Locked':selected===today()?'● Today':'Upcoming'}</span></div>
+  <div class="section-heading"><span>Timeline</span><span class="status-pill ${locked?'muted':''}">${locked?'🔒 Locked':selected===today()?'● Today':isCorrectionDate(selected)?'● Editable today':'Upcoming'}</span></div>
   ${rows.length?rows.map(renderActivityRow).join(''):`<div class="empty"><strong>Nothing planned for this date</strong><p>Use + to add an activity for this date, or create a repeating activity in Activities.</p></div>`}`;
 }
 function renderActivities() {
@@ -457,7 +463,7 @@ function render() {
     $('#main').innerHTML=locked?renderLock():ui.page==='home'?renderHome():ui.page==='activities'?renderActivities():ui.page==='categories'?renderCategories():ui.page==='missions'?renderMissions():ui.page==='editor'?renderEditor():renderSettings();
     if(!locked&&ui.page==='editor')initDayTargets($('#activity-form'),ui.editingActivity?data.schedules.find(item=>item.activityId===ui.editingActivity):null);
   }
-  $('#add-button').classList.toggle('hidden',locked||ui.page!=='home'||isPast(ui.date));
+  $('#add-button').classList.toggle('hidden',locked||ui.page!=='home'||isLockedDate(ui.date));
   $('#storage-state').textContent=locked?'Locked':syncLabel();
 }
 function openModal(title,body) {
@@ -576,7 +582,7 @@ async function saveActivity(form) {
   const base={name:String(values.get('name')).trim(),description:String(values.get('description')).trim(),categoryId:String(values.get('categoryId')),missionId:String(values.get('missionId'))||null,media,method,unit,targets,targetMinutes};
   if(!base.name||!base.description)throw new Error('Name and description are required.');
   if(mode==='date-only') {
-    if(!isBeforeStart(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
+    if(!canAddToDate(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
     const cat=category(base.categoryId),group=mission(base.missionId);
     data.logs.push({id:uid(),date:ui.date,time,activityId:null,scheduleId:null,...base,categoryName:cat.name,categoryEmoji:cat.emoji,missionName:group?.name||null,sets:targets.map(target=>({target,actual:null})),actualMinutes:null,yesNo:null,doneAt:null,createdAt:new Date().toISOString()});
     closeModal();ui.page='home';await persist('Activity added to this date');return;
@@ -601,7 +607,7 @@ async function saveActivity(form) {
   ui.page='activities';ui.editingActivity=null;await persist(existing?'Activity updated':'Activity created');
 }
 function editDate(row) {
-  if(!isBeforeStart(row.date,row.time)){toast('Planning closes at the activity start time');return}
+  if(!canChangeDatePlan(row.date,row.time)){toast('Planning closes at the activity start time');return}
   const missionOptions=`<option value="">No Mission</option>${data.missions.filter(item=>!item.archived).map(item=>`<option value="${item.id}" ${item.id===row.missionId?'selected':''}>${esc(item.name)}</option>`).join('')}`;
   const targetInput=row.method==='amount'?`<div class="field"><label>Targets</label>${row.sets.map((set,index)=>`<div class="target-editor"><span>${index+1}</span><input class="exception-target" type="number" min="0.001" step="any" value="${esc(set.target)}"></div>`).join('')}</div>`:row.method==='duration'?`<div class="field"><label for="exception-duration">Target duration · hh:mm</label><input id="exception-duration" value="${fmtDuration(row.targetMinutes)}"></div>`:'';
   openModal('Edit this date',`<form id="exception-form" data-id="${row.id}"><div class="field"><label for="exception-time">Start time · optional</label><input id="exception-time" name="time" type="time" value="${esc(row.time||'')}"></div><div class="field"><label for="exception-mission">Mission · optional</label><select id="exception-mission" name="missionId">${missionOptions}</select></div>${targetInput}<div class="form-actions"><button class="outline-button" type="button" data-close-modal>Cancel</button><button class="primary-button" type="submit">Save this date</button></div></form>`);
@@ -609,9 +615,9 @@ function editDate(row) {
 async function saveException(form) {
   const row=rowsFor(ui.date).find(item=>item.id===form.dataset.id);
   if(!row)throw new Error('Activity not found.');
-  if(!isBeforeStart(row.date,row.time))throw new Error('This activity has already started.');
+  if(!canChangeDatePlan(row.date,row.time))throw new Error('This activity has already started.');
   const time=String(new FormData(form).get('time')||'').trim()||null;
-  if(!isBeforeStart(row.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
+  if(!canChangeDatePlan(row.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
   const missionId=String(new FormData(form).get('missionId'))||null;
   const targets=row.method==='amount'?[...form.querySelectorAll('.exception-target')].map(input=>Number(input.value)):null;
   if(targets?.some(value=>!Number.isFinite(value)||value<=0))throw new Error('Every target must be positive.');
@@ -628,7 +634,7 @@ async function saveException(form) {
 }
 async function saveResult(id) {
   const row=rowsFor(ui.date).find(item=>item.id===id);
-  if(!row||isPast(row.date))return;
+  if(!row||isLockedDate(row.date))return;
   const card=$('.activity-card.expanded');
   if(!card)throw new Error('Open the activity first.');
   let actuals=null,minutes=null;
@@ -647,7 +653,7 @@ async function saveResult(id) {
 }
 async function answer(id,value) {
   const row=rowsFor(ui.date).find(item=>item.id===id);
-  if(!row||isPast(row.date))return;
+  if(!row||isLockedDate(row.date))return;
   const log=getOrCreateLog(row);log.yesNo=value;ui.expanded=ui.expanded===id?log.id:ui.expanded;await persist(value?'Marked Yes':'Marked No');
 }
 function changeMethodFields(form) {
@@ -715,7 +721,7 @@ async function handleSubmit(event) {
     if(form.id==='exception-form')await saveException(form);
     if(form.id==='existing-form'){
       const values=new FormData(form),time=String(values.get('time')||'').trim()||null;
-      if(!isBeforeStart(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
+      if(!canAddToDate(ui.date,time))throw new Error('Choose a future start time, or leave it blank for Anytime.');
       const source=activity(String(values.get('activityId'))),cat=category(source.categoryId),group=mission(source.missionId);
       data.logs.push({id:uid(),date:ui.date,time,activityId:source.id,scheduleId:null,name:source.name,description:source.description,categoryId:source.categoryId,categoryName:cat.name,categoryEmoji:cat.emoji,missionId:source.missionId,missionName:group?.name||null,media:source.media,method:source.method,unit:source.unit,targets:[...source.targets],targetMinutes:source.targetMinutes,sets:source.targets.map(target=>({target,actual:null})),actualMinutes:null,yesNo:null,doneAt:null,createdAt:new Date().toISOString()});
       closeModal();await persist('Activity added to this date');
@@ -770,7 +776,16 @@ $('#modal-backdrop').addEventListener('click',event=>{if(event.target.id==='moda
 $('#drawer-backdrop').addEventListener('click',event=>{if(event.target.id==='drawer-backdrop')event.target.classList.add('hidden')});
 window.addEventListener('online',()=>{render();scheduleSync(0)});
 window.addEventListener('offline',render);
-window.addEventListener('focus',()=>scheduleSync(0));
+async function refreshDateBoundary() {
+  if(!data)return;
+  const date=today();
+  if(date===lastCalendarDate)return;
+  lastCalendarDate=date;
+  if(materializeMissedDates())await persist();
+  else render();
+}
+window.addEventListener('focus',()=>{refreshDateBoundary().catch(error=>toast(error.message||'Could not refresh date'));scheduleSync(0)});
+setInterval(()=>refreshDateBoundary().catch(error=>toast(error.message||'Could not refresh date')),30_000);
 
 async function init() {
   try {
@@ -778,6 +793,7 @@ async function init() {
     syncMeta();
     lastSavedState=structuredClone(data);
     ui.date=today();
+    lastCalendarDate=today();
     if(materializeMissedDates()){recordChanges();await writeData(data);}
     else if(!await readData())await writeData(data);
     lastSavedState=structuredClone(data);
