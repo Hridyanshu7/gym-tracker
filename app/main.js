@@ -1,4 +1,4 @@
-import {cloud, entityKey, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
+import {cloud, entityKey, importActivityImage, pullCloud, pushRecord, updateTimeZone} from './cloud.js';
 import {APP_AUTH_EMAIL} from './config.js';
 import {adoptCloudOccurrence, reconcilePendingLogs} from './reconcile.js';
 
@@ -510,11 +510,8 @@ async function loadActivityMediaLink(form) {
   form._mediaSequence=sequence;
   feedback.textContent='Checking image link…';feedback.classList.remove('media-error');
   const promise=(async()=>{
-    let response;
-    try {response=await fetch(url,{mode:'cors',redirect:'follow'})}
-    catch {throw new Error('This site blocks importing its image. Try a direct image address from another source.');}
-    if(!response.ok)throw new Error(`Image link returned HTTP ${response.status}.`);
-    const blob=await response.blob();
+    if(!navigator.onLine)throw new Error('Connect to the internet to import an image link.');
+    const blob=await importActivityImage(url);
     if(!blob.size||blob.size>10*1024*1024)throw new Error('The image must be under 10 MB.');
     const mime=await imageMime(blob);
     const image=await fileToDataUrl(new Blob([blob],{type:mime}));

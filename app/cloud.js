@@ -10,6 +10,17 @@ const iso = () => new Date().toISOString();
 const entities = ['category_legend','missions','activities','schedules','schedule_exceptions','activity_logs'];
 export const entityKey = (table,id) => `${table}:${id}`;
 
+export async function importActivityImage(url) {
+  const {data,error}=await cloud.functions.invoke('import-activity-media',{body:{url}});
+  if(error){
+    let message='Could not import this image. Try another direct image address.';
+    try {message=(await error.context?.json())?.error||message} catch {}
+    throw new Error(message);
+  }
+  if(!(data instanceof Blob)||!data.size)throw new Error('The image source returned no data.');
+  return data;
+}
+
 async function allRows(table) {
   const rows=[];
   for(let start=0;;start+=1000) {

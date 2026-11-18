@@ -418,3 +418,6 @@ enabled = true
 # Production project linked to the GitHub main branch.
 [remotes.main]
 project_id = "bwavcibrrynjysxzqrto"
+
+[functions.import-activity-media]
+verify_jwt = false
