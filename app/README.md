@@ -16,4 +16,6 @@ For initial cloud setup, place the Supabase project access token and project ref
 
 Use **Activities** to create a reusable activity and schedule, or Home **+** to create a date-only activity. Changes made offline sync when the device reconnects and has an active session; synced pending edits are removed while the local cache remains.
 
+Exercise data by [RepDB](https://repdb.co). The weekly gym import uses RepDB free-tier exercise illustrations under its [in-app use licence](https://github.com/RepDB/exercise-dataset/blob/main/LICENSE-DATA.md).
+
 When creating an activity, add its required image or GIF with **Choose File**, **Paste image**, or Ctrl/⌘+V while the form is open. A preview confirms what will be saved. Some browsers paste a GIF as a still image; use file upload when animation matters.
